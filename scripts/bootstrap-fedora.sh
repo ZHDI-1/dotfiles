@@ -57,7 +57,9 @@ if [[ "$mode" == "dev" || "$mode" == "full" ]] && command -v cargo >/dev/null 2>
 
   for crate in "${cargo_fallback_tools[@]}"; do
     if ! grep -q "^${crate} v" <<<"$installed_cargo"; then
-      cargo install --locked "$crate"
+      if ! cargo install --locked "$crate"; then
+        printf 'warn: failed to install cargo fallback tool: %s\n' "$crate" >&2
+      fi
     fi
   done
 fi

@@ -1,0 +1,16 @@
+bat
+curl
+fd-find
+fzf
+gh
+git
+neovim
+python3
+ripgrep
+rustup
+shellcheck
+shfmt
+tmux
+unzip
+uv
+zoxide

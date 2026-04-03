@@ -26,3 +26,5 @@ sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply ZHDI-1
 - macOS-only files are gated by `.chezmoiignore.tmpl`.
 - `create_*.tmpl` files are placeholders for machine-local secrets and are only created if missing.
 - Package bootstrap is mode-based: `core` for essentials, `dev` for toolchains, `full` for the workstation setup.
+- Rust is bootstrapped through `rustup`, not distro Rust packages; this repo only installs the shared toolchain/components and shell-facing tools.
+- Node is bootstrapped through `fnm`; this repo only ensures the active Node LTS runtime, and repo-specific npm globals should be installed by the repo that needs them.

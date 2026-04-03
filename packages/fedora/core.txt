@@ -7,7 +7,6 @@ git
 neovim
 python3
 ripgrep
-rustup
 shellcheck
 shfmt
 tmux

@@ -1,5 +1,4 @@
 bear
-cargo
 perl-FindBin
 clang
 clang-tools-extra
@@ -19,7 +18,6 @@ qemu
 qemu-img
 qemu-system-aarch64
 qemu-system-x86
-rust-analyzer
 tree
 tree-sitter-cli
 wireshark-cli

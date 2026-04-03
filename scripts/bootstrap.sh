@@ -57,17 +57,23 @@ esac
 
 case "$(uname -s)" in
   Darwin)
-    exec "$repo_root/scripts/bootstrap-macos.sh" "$mode" "$with_gui"
+    "$repo_root/scripts/bootstrap-macos.sh" "$mode" "$with_gui"
     ;;
   Linux)
     if command -v dnf >/dev/null 2>&1 || [[ -f /etc/fedora-release ]]; then
-      exec "$repo_root/scripts/bootstrap-fedora.sh" "$mode"
+      "$repo_root/scripts/bootstrap-fedora.sh" "$mode"
+    else
+      printf 'error: unsupported Linux distribution for this bootstrap\n' >&2
+      exit 1
     fi
-    printf 'error: unsupported Linux distribution for this bootstrap\n' >&2
-    exit 1
     ;;
   *)
     printf 'error: unsupported OS %s\n' "$(uname -s)" >&2
     exit 1
     ;;
 esac
+
+if [[ "$mode" == "dev" || "$mode" == "full" ]]; then
+  "$repo_root/scripts/bootstrap-rust-tools.sh"
+  "$repo_root/scripts/bootstrap-node-tools.sh"
+fi

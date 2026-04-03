@@ -46,6 +46,10 @@ if ! command -v fnm >/dev/null 2>&1; then
   curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell
 fi
 
+if [[ -x "$HOME/.local/share/fnm/fnm" ]]; then
+  ln -sf "$HOME/.local/share/fnm/fnm" "$HOME/.local/bin/fnm"
+fi
+
 if [[ "$mode" == "dev" || "$mode" == "full" ]] && command -v cargo >/dev/null 2>&1; then
   cargo_fallback_tools=(
     stylua

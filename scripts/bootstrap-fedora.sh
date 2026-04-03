@@ -48,7 +48,6 @@ fi
 
 if [[ "$mode" == "dev" || "$mode" == "full" ]] && command -v cargo >/dev/null 2>&1; then
   cargo_fallback_tools=(
-    zellij
     stylua
     taplo-cli
     vivid

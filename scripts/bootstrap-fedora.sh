@@ -33,7 +33,7 @@ for manifest in "${manifests[@]}"; do
 done
 
 if ((${#dnf_packages[@]} > 0)); then
-  sudo dnf install -y --skip-unavailable "${dnf_packages[@]}"
+  sudo dnf install -y --setopt=install_weak_deps=False --skip-unavailable "${dnf_packages[@]}"
 fi
 
 mkdir -p "$HOME/.local/bin"

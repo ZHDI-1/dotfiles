@@ -8,6 +8,12 @@ Managed with [chezmoi](https://www.chezmoi.io/).
 sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply ZHDI-1
 ```
 
+## Packages
+
+```sh
+./scripts/bootstrap.sh
+```
+
 ## Notes
 
 - `~/.config/nvim` is managed as an external git repo via `.chezmoiexternal.toml`.

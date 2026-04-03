@@ -1,0 +1,122 @@
+{{ if eq .chezmoi.os "darwin" -}}
+# Added by OrbStack: 'orb' SSH host for Linux machines
+# This only works if it's at the top of ssh_config (before any Host blocks).
+# Comment this line if you don't want it to be added again.
+Include ~/.orbstack/ssh/config
+
+{{ end -}}
+
+Host *
+  ServerAliveInterval 60
+  TCPKeepAlive yes
+  ServerAliveCountMax 3
+
+  ControlMaster auto
+  ControlPath ~/.ssh/sockets/%r@%h-%p
+  ControlPersist 60m
+
+# Host *.corp.kuaishou.com
+#     ProxyCommand nc -X 5 -x 127.0.0.1:1080 %h %p
+
+Host 192.168.111.* 192.168.122.*
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  LogLevel ERROR
+
+Host utm-fedora
+  HostName 192.168.65.5
+  User zhdi
+  ServerAliveInterval 5
+  TCPKeepAlive yes
+
+Host utm-proxy-kuaishou
+  HostName 192.168.65.10
+  User zhdi
+  ServerAliveInterval 5
+  TCPKeepAlive yes
+
+
+Host localmbp
+  HostName localhost
+  User zhdi
+  ServerAliveInterval 5
+  TCPKeepAlive yes
+
+
+Host aliyun-server
+  Hostname 8.156.65.244
+  User root
+  Compression yes
+
+# Match host wkserver exec "true"
+# this fucking command extract the ssid of currently connected wifi
+# fucccccccccccccccccckkkkkkkkkkkkkkkkkkkkk you apple
+# Match host wkserver exec "/usr/local/bin/is_not_home 'TPLINK_5G'"
+# this now only a fallback
+Host jump-wkserver
+  User zhdi
+  HostName wanke-server.zhdi.top
+  ProxyJump aliyun-server
+  Compression yes
+#
+#
+# <<<<<<<<<<<<<<<< HISTORICALLY WE NOW USE QUANTX AND SS PROXY to ROUTE THIS ENTIRE FUCKING THING TO HOMELAB
+
+Host wkserver
+  HostName 192.168.1.225
+  User zhdi
+  Compression yes
+
+Host kernel-reader
+  Hostname 192.168.111.163
+  User zhdi
+  Compression yes
+  # ProxyJump wkserver
+
+Host make-funs
+  Hostname 192.168.111.114
+  User zhdi
+  Compression yes
+  # ProxyJump wkserver
+
+Host win-server
+  HostName 192.168.122.144
+  User zhdi
+  Compression yes
+  # Disable multiplexing for the stable tunnel
+  ControlMaster no
+  ControlPath none
+  # Send keepalives more frequently (every 15s instead of 60s)
+  ServerAliveInterval 15
+  ServerAliveCountMax 4
+  # ProxyJump wkserver
+
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<DAMN
+
+Host azure
+  HostName 20.2.201.123
+  User root
+  Port 39105
+  AddKeysToAgent yes
+  ServerAliveInterval 5
+  TCPKeepAlive yes
+
+Host dg-vm
+  HostName 143.110.230.77
+  User root
+  Port 5900
+  ServerAliveInterval 5
+  TCPKeepAlive yes
+
+Host github.com
+  HostName ssh.github.com
+  Port 443
+  AddKeysToAgent yes
+  # UseKeychain yes
+  IdentityFile ~/.ssh/id_ed25519
+
+
+{{ if eq .chezmoi.os "darwin" -}}
+Host *
+	IdentityAgent {{ joinPath .chezmoi.homeDir "Library" "Containers" "com.kuaishou.it.secpass.SecretAgent" "Data" "socket.ssh" }}
+{{ end -}}

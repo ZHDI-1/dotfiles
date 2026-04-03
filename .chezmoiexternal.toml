@@ -1,0 +1,4 @@
+[ ".config/nvim" ]
+type = "git-repo"
+url = "git@github.com:ZHDI-1/nvimconf.git"
+pull.args = ["--ff-only"]

@@ -1,0 +1,8 @@
+{
+  "env": {},
+  "model": "opus",
+  "enabledPlugins": {
+    "clangd-lsp@claude-plugins-official": true
+  },
+  "effortLevel": "high"
+}

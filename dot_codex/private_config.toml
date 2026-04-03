@@ -1,0 +1,34 @@
+model = "gpt-5.4"
+model_reasoning_effort = "xhigh"
+personality = "pragmatic"
+[projects."/Users/zhdi/develop/kbd-platform"]
+trust_level = "untrusted"
+
+[projects."/Users/zhdi/develop/kbdv2"]
+trust_level = "untrusted"
+
+[projects."/Users/zhdi"]
+trust_level = "untrusted"
+
+[projects."/Users/zhdi/develop/kwaistore_scripts"]
+trust_level = "trusted"
+
+[projects."/Users/zhdi/develop/kwaistore"]
+trust_level = "trusted"
+
+[projects."/Volumes/build-part/linux"]
+trust_level = "trusted"
+
+[projects."/Users/zhdi/.config/nvim"]
+trust_level = "trusted"
+
+[notice.model_migrations]
+"gpt-5.2" = "gpt-5.2-codex"
+
+[features]
+multi_agent = true
+js_repl = true
+
+[mcp_servers.playwright]
+args = ["@playwright/mcp@latest"]
+command = "npx"

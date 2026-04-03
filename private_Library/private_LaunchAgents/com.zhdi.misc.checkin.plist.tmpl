@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.zhdi.misc.checkin</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/Library/Frameworks/Python.framework/Versions/3.10/bin/python3</string>
+      <string>{{ joinPath .chezmoi.homeDir "develop" "misc" "checkin" "checkin.py" }}</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+      <key>Hour</key>
+      <integer>0</integer>
+      <key>Minute</key>
+      <integer>0</integer>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>{{ joinPath .chezmoi.homeDir "develop" "misc" "checkin" }}</string>
+  </dict>
+</plist>

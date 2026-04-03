@@ -1,0 +1,3 @@
+version: "1"
+aliases:
+    gitignore: '!gh api -X GET /gitignore/templates/"$1" --jq ".source"'

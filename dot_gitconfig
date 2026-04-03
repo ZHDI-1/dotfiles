@@ -1,0 +1,5 @@
+[core]
+	excludesfile = /Users/zhdi/.gitignore_global
+[user]
+	name = zhdi-1
+	email = zhdidi325@gmail.com

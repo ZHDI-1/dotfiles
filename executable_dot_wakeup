@@ -1,0 +1,4 @@
+#!/bin/bash
+
+shortcuts run 'toggle LPM automatically'
+

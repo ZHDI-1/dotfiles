@@ -1,0 +1,30 @@
+{
+  "apiKey": "",
+  "webuiPassword": "",
+  "debug": false,
+  "logLevel": "info",
+  "maxRetries": 5,
+  "retryBaseMs": 1000,
+  "retryMaxMs": 30000,
+  "persistTokenCache": false,
+  "defaultCooldownMs": 9000,
+  "maxWaitBeforeErrorMs": 120000,
+  "modelMapping": {},
+  "accountSelection": {
+    "strategy": "hybrid",
+    "healthScore": {
+      "initial": 70,
+      "successReward": 1,
+      "rateLimitPenalty": -10,
+      "failurePenalty": -20,
+      "recoveryPerHour": 2,
+      "minUsable": 50,
+      "maxScore": 100
+    },
+    "tokenBucket": {
+      "maxTokens": 50,
+      "tokensPerMinute": 6,
+      "initialTokens": 50
+    }
+  }
+}

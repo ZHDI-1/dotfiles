@@ -1,0 +1,25 @@
+{{ if eq .chezmoi.os "darwin" -}}
+if [ -x /opt/homebrew/bin/brew ]; then
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+fi
+{{ end -}}
+
+if [[ -r "${HOME}/.config/zsh/env.zsh" ]]; then
+  source "${HOME}/.config/zsh/env.zsh"
+fi
+
+
+{{ if eq .chezmoi.os "darwin" -}}
+# Added by OrbStack: command-line tools and integration
+# Comment this line if you don't want it to be added again.
+source ~/.orbstack/shell/init.zsh 2>/dev/null || :
+{{ end -}}
+
+{{ if eq .chezmoi.os "darwin" -}}
+# Added by swiftly
+[[ -r "${HOME}/.swiftly/env.sh" ]] && . "${HOME}/.swiftly/env.sh"
+{{ end -}}
+
+if [[ -r "${HOME}/.config/zsh/secrets.local.zsh" ]]; then
+  source "${HOME}/.config/zsh/secrets.local.zsh"
+fi

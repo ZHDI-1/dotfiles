@@ -3,34 +3,18 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 packages_dir="$repo_root/packages/fedora"
-mode="${1:-full}"
-
-case "$mode" in
-  core|dev|full) ;;
-  *)
-    printf 'error: invalid mode %s\n' "$mode" >&2
-    exit 1
-    ;;
-esac
+manifest="$packages_dir/packages.txt"
 
 if ! command -v dnf >/dev/null 2>&1; then
   printf 'error: dnf is not installed\n' >&2
   exit 1
 fi
 
-manifests=("$packages_dir/core.txt")
-
-if [[ "$mode" == "dev" || "$mode" == "full" ]]; then
-  manifests+=("$packages_dir/dev.txt")
-fi
-
 dnf_packages=()
 
-for manifest in "${manifests[@]}"; do
-  while IFS= read -r pkg; do
-    dnf_packages+=("$pkg")
-  done < <(grep -vE '^\s*(#|$)' "$manifest")
-done
+while IFS= read -r pkg; do
+  dnf_packages+=("$pkg")
+done < <(grep -vE '^\s*(#|$)' "$manifest")
 
 if ((${#dnf_packages[@]} > 0)); then
   sudo dnf install -y --setopt=install_weak_deps=False --skip-unavailable "${dnf_packages[@]}"

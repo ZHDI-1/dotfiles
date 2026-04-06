@@ -3,16 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 packages_dir="$repo_root/packages/macos"
-mode="${1:-full}"
-with_gui="${2:-auto}"
-
-case "$mode" in
-  core|dev|full) ;;
-  *)
-    printf 'error: invalid mode %s\n' "$mode" >&2
-    exit 1
-    ;;
-esac
+with_gui="${1:-auto}"
 
 case "$with_gui" in
   auto|yes|no) ;;
@@ -30,14 +21,10 @@ fi
 
 brewfiles=(
   "$packages_dir/taps.Brewfile"
-  "$packages_dir/core.Brewfile"
+  "$packages_dir/packages.Brewfile"
 )
 
-if [[ "$mode" == "dev" || "$mode" == "full" ]]; then
-  brewfiles+=("$packages_dir/dev.Brewfile")
-fi
-
-if [[ "$with_gui" == "yes" || ( "$with_gui" == "auto" && "$mode" == "full" ) ]]; then
+if [[ "$with_gui" == "yes" || "$with_gui" == "auto" ]]; then
   brewfiles+=("$packages_dir/gui.Brewfile")
 fi
 

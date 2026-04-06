@@ -2,30 +2,19 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-mode="full"
 with_gui="auto"
 
 usage() {
   cat <<'EOF'
-usage: ./scripts/bootstrap.sh [--mode core|dev|full] [--with-gui|--without-gui]
+usage: ./scripts/bootstrap.sh [--with-gui|--without-gui]
 
-modes:
-  core   install shell/editor/bootstrap essentials
-  dev    install core plus development toolchains
-  full   install dev plus macOS GUI packages by default
+This installs the full package/tool set for the current platform.
+On macOS, GUI packages are installed by default and can be disabled.
 EOF
 }
 
 while (($# > 0)); do
   case "$1" in
-    --mode)
-      mode="${2:-}"
-      shift 2
-      ;;
-    --mode=*)
-      mode="${1#*=}"
-      shift
-      ;;
     --with-gui)
       with_gui="yes"
       shift
@@ -46,22 +35,13 @@ while (($# > 0)); do
   esac
 done
 
-case "$mode" in
-  core|dev|full) ;;
-  *)
-    printf 'error: invalid mode %s\n' "$mode" >&2
-    usage >&2
-    exit 1
-    ;;
-esac
-
 case "$(uname -s)" in
   Darwin)
-    "$repo_root/scripts/bootstrap-macos.sh" "$mode" "$with_gui"
+    "$repo_root/scripts/bootstrap-macos.sh" "$with_gui"
     ;;
   Linux)
     if command -v dnf >/dev/null 2>&1 || [[ -f /etc/fedora-release ]]; then
-      "$repo_root/scripts/bootstrap-fedora.sh" "$mode"
+      "$repo_root/scripts/bootstrap-fedora.sh"
     else
       printf 'error: unsupported Linux distribution for this bootstrap\n' >&2
       exit 1
@@ -73,7 +53,5 @@ case "$(uname -s)" in
     ;;
 esac
 
-if [[ "$mode" == "dev" || "$mode" == "full" ]]; then
-  "$repo_root/scripts/bootstrap-rust-tools.sh"
-  "$repo_root/scripts/bootstrap-node-tools.sh"
-fi
+"$repo_root/scripts/bootstrap-rust-tools.sh"
+"$repo_root/scripts/bootstrap-node-tools.sh"

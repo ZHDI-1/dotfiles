@@ -22,10 +22,6 @@ neovim
 openvpn
 perl-FindBin
 python3
-qemu
-qemu-img
-qemu-system-aarch64
-qemu-system-x86
 ripgrep
 shellcheck
 shfmt

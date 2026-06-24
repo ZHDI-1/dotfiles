@@ -27,6 +27,10 @@ hide_when_typing = true
 [terminal]
 osc52 = "CopyPaste"
 
+[terminal.shell]
+program = "/opt/homebrew/bin/tmux"
+args = ["new-session", "-A"]
+
 [colors]
 cursor = { text = "0x282829", cursor = "0x928374" }
 

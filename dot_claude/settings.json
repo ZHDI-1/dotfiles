@@ -1,8 +1,13 @@
 {
   "env": {},
   "model": "opus",
+  "statusLine": {
+    "type": "command",
+    "command": "bash /Users/zhdi/.claude/statusline-command.sh"
+  },
   "enabledPlugins": {
     "clangd-lsp@claude-plugins-official": true
   },
-  "effortLevel": "high"
+  "effortLevel": "high",
+  "skipDangerousModePermissionPrompt": true
 }

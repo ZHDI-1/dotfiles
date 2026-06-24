@@ -1,5 +1,8 @@
+[[ -o interactive ]] && [[ -t 0 ]] && [[ -t 1 ]] || return 0
+
 typeset -U fpath FPATH
 fpath=(
+  "${HOME}/.config/zsh/completions"
   "/opt/homebrew/share/zsh/site-functions"
   $fpath
 )

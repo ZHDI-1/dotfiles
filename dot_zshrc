@@ -1,10 +1,13 @@
 # zmodload zsh/zprof
-# Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
-# Initialization code that may require console input (password prompts, [y/n]
-# confirmations, etc.) must go above this block; everything else may go below.
-if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
-  source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+
+# Some tools launch zsh with -i/-l but without a real terminal. Skip prompt and
+# line-editor setup there to avoid non-tty errors and broken tmux attach flows.
+if [[ ! -o interactive ]] || [[ ! -t 0 ]] || [[ ! -t 1 ]]; then
+  return 0
 fi
+
+# Powerlevel10k instant prompt is disabled. Do not source its cached preamble,
+# otherwise it can still alter tty state before ~/.p10k.zsh is loaded.
 
 if [[ -r "${HOME}/.config/zsh/plugins.zsh" ]]; then
   source "${HOME}/.config/zsh/plugins.zsh"

@@ -13,12 +13,13 @@ Host *
 
   ControlMaster auto
   ControlPath ~/.ssh/sockets/%r@%h-%p
-  ControlPersist 60m
+  ControlPersist 5m
 
 # Host *.corp.kuaishou.com
 #     ProxyCommand nc -X 5 -x 127.0.0.1:1080 %h %p
 
 Host 192.168.111.* 192.168.122.*
+  ControlMaster no
   StrictHostKeyChecking no
   UserKnownHostsFile /dev/null
   LogLevel ERROR
@@ -63,7 +64,7 @@ Host jump-wkserver
 # <<<<<<<<<<<<<<<< HISTORICALLY WE NOW USE QUANTX AND SS PROXY to ROUTE THIS ENTIRE FUCKING THING TO HOMELAB
 
 Host wkserver
-  HostName 192.168.1.225
+  HostName 192.168.0.225
   User zhdi
   Compression yes
 
@@ -77,7 +78,8 @@ Host make-funs
   Hostname 192.168.111.114
   User zhdi
   Compression yes
-  # ProxyJump wkserver
+  ControlMaster no
+  ProxyJump wkserver
 
 Host win-server
   HostName 192.168.122.200
@@ -94,17 +96,9 @@ Host win-server
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<DAMN
 
 Host azure
-  HostName 20.2.201.123
-  User root
-  Port 39105
+  HostName 20.6.131.153
+  User azureuser
   AddKeysToAgent yes
-  ServerAliveInterval 5
-  TCPKeepAlive yes
-
-Host dg-vm
-  HostName 143.110.230.77
-  User root
-  Port 5900
   ServerAliveInterval 5
   TCPKeepAlive yes
 

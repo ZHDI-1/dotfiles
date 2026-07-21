@@ -1,5 +1,5 @@
-model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
+model = "gpt-5.6-sol"
+model_reasoning_effort = "low"
 personality = "pragmatic"
 approval_policy = "never"
 approvals_reviewer = "user"
@@ -165,6 +165,33 @@ trust_level = "trusted"
 [projects."/private/var/folders/zv/v2681z9j6bl20f72psr0df440000gn/T/codexside.9ODfLvwUZD"]
 trust_level = "trusted"
 
+[projects."/private/var/folders/zv/v2681z9j6bl20f72psr0df440000gn/T/codexside.XeM0xhscqn"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/zv/v2681z9j6bl20f72psr0df440000gn/T/codexside.Bny26Xrca5"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/zv/v2681z9j6bl20f72psr0df440000gn/T/codexside.7TI9e8wfVr"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/zv/v2681z9j6bl20f72psr0df440000gn/T/codexside.MSYxrwCLya"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/zv/v2681z9j6bl20f72psr0df440000gn/T/codexside.jsMMNVKVLi"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/zv/v2681z9j6bl20f72psr0df440000gn/T/codexside.8togU9394F"]
+trust_level = "trusted"
+
+[projects."/Users/zhdi/develop/gfw"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/zv/v2681z9j6bl20f72psr0df440000gn/T/codexside.3arKl6vxxs"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/zv/v2681z9j6bl20f72psr0df440000gn/T/codexside.BumQFevhB6"]
+trust_level = "trusted"
+
 [notice]
 hide_rate_limit_model_nudge = true
 
@@ -277,3 +304,4 @@ status_line_use_colors = true
 
 [tui.model_availability_nux]
 "gpt-5.5" = 4
+"gpt-5.6-sol" = 4

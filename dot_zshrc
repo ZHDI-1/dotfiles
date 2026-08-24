@@ -23,3 +23,14 @@ fi
 if [[ -r "${HOME}/.config/zsh/aliases.zsh" ]]; then
   source "${HOME}/.config/zsh/aliases.zsh"
 fi
+
+# NVM configuration (added by MyFlicker installer)
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+
+# Add npm global bin to PATH (added by MyFlicker installer)
+export PATH="/home/zhdi/.local/share/fnm/node-versions/v24.18.0/installation/bin:$PATH"
+
+# MyFlicker CLI alias
+alias m="mfcli"

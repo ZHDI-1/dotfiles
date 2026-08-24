@@ -1,11 +1,12 @@
 model = "gpt-5.6-sol"
-model_reasoning_effort = "low"
+model_reasoning_effort = "xhigh"
 personality = "pragmatic"
 approval_policy = "never"
 approvals_reviewer = "user"
 sandbox_mode = "danger-full-access"
 service_tier = "fast"
-plan_mode_reasoning_effort = "high"
+plan_mode_reasoning_effort = "max"
+
 
 notify = ["/Users/zhdi/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient", "turn-ended"]
 
@@ -192,6 +193,48 @@ trust_level = "trusted"
 [projects."/private/var/folders/zv/v2681z9j6bl20f72psr0df440000gn/T/codexside.BumQFevhB6"]
 trust_level = "trusted"
 
+[projects."/mnt/mac/Volumes/build_part/ceph-toolbox"]
+trust_level = "trusted"
+
+[projects."/mnt/mac/Volumes/build_part/ceph"]
+trust_level = "trusted"
+
+[projects."/mnt/mac/Volumes/build_part/ceph-client-work/5.14"]
+trust_level = "trusted"
+
+[projects."/home/zhdi"]
+trust_level = "trusted"
+
+[projects."/mnt/mac/Volumes/build_part/rh_linux"]
+trust_level = "trusted"
+
+[projects."/mnt/mac/Volumes/build_part/ceph-client-work"]
+trust_level = "trusted"
+
+[projects."/home/zhdi/.config/nvim"]
+trust_level = "trusted"
+
+[projects."/mnt/mac/Volumes/build_part/kbuilder"]
+trust_level = "trusted"
+
+[projects."/mnt/mac/Volumes/build_part/storage_advise"]
+trust_level = "trusted"
+
+[projects."/mnt/mac/Volumes/build_part/snake"]
+trust_level = "trusted"
+
+[projects."/mnt/mac/Volumes/build_part/kfs-agent"]
+trust_level = "trusted"
+
+[projects."/mnt/mac/Volumes/build_part/kfs-platform"]
+trust_level = "trusted"
+
+[projects."/mnt/mac/Volumes/build_part/bootstrap-host"]
+trust_level = "trusted"
+
+[projects."/mnt/mac/Volumes/build_part/history_exporter"]
+trust_level = "trusted"
+
 [notice]
 hide_rate_limit_model_nudge = true
 
@@ -200,30 +243,11 @@ hide_rate_limit_model_nudge = true
 
 [features]
 multi_agent = true
-js_repl = false
+# js_repl = false
 
 [mcp_servers.playwright]
 args = ["@playwright/mcp@latest"]
 command = "npx"
-
-[mcp_servers.node_repl]
-args = []
-command = "/Applications/Codex.app/Contents/Resources/node_repl"
-startup_timeout_sec = 120
-
-[mcp_servers.node_repl.env]
-NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS = "1000"
-NODE_REPL_NODE_MODULE_DIRS = ""
-NODE_REPL_NODE_PATH = "/Applications/Codex.app/Contents/Resources/node"
-NODE_REPL_TRUSTED_CODE_PATHS = "/Users/zhdi/.codex"
-CODEX_HOME = "/Users/zhdi/.codex"
-NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "a0dc4b6aaefe6a6a82d9a34fb524e77df6e0bf71387f0d4760157a46f52e6a93"
-BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
-NODE_REPL_INSTRUCTIONS_USE_CASE_BROWSER = "Control the in-app browser in conjunction with the Browser Plugin."
-NODE_REPL_INSTRUCTIONS_USE_CASE_CHROME = "Control the Chrome browser in conjunction with the Chrome Plugin. Prefer this method of controlling Chrome over alternatives (such as Computer Use) unless the user explicitly mentions an alternative."
-BROWSER_USE_CODEX_APP_BUILD_FLAVOR = "prod"
-BROWSER_USE_CODEX_APP_VERSION = "26.602.30954"
-CODEX_CLI_PATH = "/Applications/Codex.app/Contents/Resources/codex"
 
 [marketplaces.openai-bundled]
 last_updated = "2026-06-18T16:44:22Z"
@@ -301,6 +325,7 @@ global = "zed"
 [tui]
 status_line = ["model-with-reasoning", "current-dir", "project-name", "git-branch", "branch-changes", "run-state", "context-used", "five-hour-limit", "weekly-limit", "task-progress"]
 status_line_use_colors = true
+theme = "gruvbox-light"
 
 [tui.model_availability_nux]
 "gpt-5.5" = 4

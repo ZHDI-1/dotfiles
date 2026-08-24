@@ -67,3 +67,128 @@ yt-audio() {
     -o "%(title).200B [%(id)s].%(ext)s" \
     "$@"
 }
+
+S3_ENDPOINT_URL="${S3_ENDPOINT_URL:-http://bs3-hb1.corp.kuaishou.com}"
+S3_COMMON_FLAGS="${S3_COMMON_FLAGS:---no-sign-request}"
+DEFAULT_S3_BUCKET="${DEFAULT_S3_BUCKET:-infra-kfs}"
+export AWS_EC2_METADATA_DISABLED=true
+
+_s3_check_deps() {
+  if ! command -v aws >/dev/null 2>&1; then
+    print -u2 "Error: 'aws' CLI not found. Please install it."
+    return 1
+  fi
+}
+
+_s3_resolve_path() {
+  local s3_path="$1"
+
+  if [[ "$s3_path" == s3://* ]]; then
+    print -r -- "$s3_path"
+    return
+  fi
+
+  if [[ -z "$DEFAULT_S3_BUCKET" ]]; then
+    print -u2 "Warning: No default bucket set. Using path as-is: $s3_path"
+    print -r -- "$s3_path"
+    return
+  fi
+
+  print -r -- "s3://${DEFAULT_S3_BUCKET}/${s3_path#/}"
+}
+
+_s3_run() {
+  _s3_check_deps || return 1
+
+  local -a s3_base_cmd=(aws s3)
+
+  if [[ -n "$S3_ENDPOINT_URL" ]]; then
+    s3_base_cmd+=(--endpoint-url "$S3_ENDPOINT_URL")
+  fi
+
+  if [[ -n "$S3_COMMON_FLAGS" ]]; then
+    local -a common_flags_array
+    common_flags_array=("${(@z)S3_COMMON_FLAGS}")
+    s3_base_cmd+=("${common_flags_array[@]}")
+  fi
+
+  "${s3_base_cmd[@]}" "$@"
+}
+
+s3ls() {
+  local s3_path_arg="${1:-}"
+  local s3_path
+
+  if [[ -z "$s3_path_arg" ]]; then
+    if [[ -n "$DEFAULT_S3_BUCKET" ]]; then
+      s3_path="s3://${DEFAULT_S3_BUCKET}/"
+    else
+      s3_path="s3://"
+    fi
+  else
+    s3_path=$(_s3_resolve_path "$s3_path_arg")
+  fi
+
+  print -u2 "Listing: $s3_path..."
+  _s3_run ls "$s3_path" || {
+    print -u2 "Error: Failed to list '$s3_path'"
+    return 1
+  }
+}
+
+s3up() {
+  if (( $# != 2 )); then
+    print -u2 "Usage: s3up <local_file> <s3_key_or_path>"
+    print -u2 "Example (default bucket): s3up ./file.txt my-key.txt"
+    print -u2 "Example (full path):    s3up ./file.txt s3://other-bucket/my-key.txt"
+    return 1
+  fi
+
+  local local_file="$1"
+  local s3_path_arg="$2"
+  local s3_path
+  s3_path=$(_s3_resolve_path "$s3_path_arg")
+
+  if [[ ! -f "$local_file" ]]; then
+    print -u2 "Error: Local file not found: $local_file"
+    return 1
+  fi
+
+  print -u2 "Uploading: $local_file -> $s3_path..."
+  _s3_run cp "$local_file" "$s3_path" || {
+    print -u2 "Error: Failed to upload '$local_file' to '$s3_path'"
+    return 1
+  }
+}
+
+s3down() {
+  if (( $# == 0 || $# > 3 )); then
+    print -u2 "Usage: s3down <s3_key_or_path> [local_path] [--recursive]"
+    print -u2 "Example (file):      s3down my-key.txt ./"
+    print -u2 "Example (directory): s3down my-directory/ ./my-directory --recursive"
+    return 1
+  fi
+
+  local s3_path_arg="$1"
+  local local_path="${2:-.}"
+  local recursive_flag="${3:-}"
+  local s3_path
+
+  if [[ -n "$recursive_flag" && "$recursive_flag" != "--recursive" ]]; then
+    print -u2 "Error: Unknown option: $recursive_flag"
+    return 1
+  fi
+
+  s3_path=$(_s3_resolve_path "$s3_path_arg")
+
+  print -u2 "Downloading: $s3_path -> $local_path..."
+  _s3_run cp "$s3_path" "$local_path" ${recursive_flag:+"$recursive_flag"} || {
+    print -u2 "Error: Failed to download '$s3_path' to '$local_path'"
+    return 1
+  }
+}
+
+
+relay() {
+        TERM=xterm-256color ssh relay "$@"
+}

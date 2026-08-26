@@ -1,0 +1,59 @@
+---
+# lsd metadata theme for Ghostty "Gruvbox Light Hard".
+#
+# Target background: #f9f5d7
+# Target foreground: #3c3836
+# Filename/file-type colors remain controlled by:
+#   vivid generate gruvbox-light-hard
+#
+# Fixed Gruvbox Light colors are used intentionally. Date and size tiers use
+# different hue families so their thresholds remain obvious at a glance.
+
+# Strong neutral foreground for identity metadata.
+user: "#3c3836"
+group: "#665c54"
+
+permission:
+  # Permissions remain distinct but compact enough for dense long listings.
+  read: "#427b58"          # dark aqua/green
+  write: "#af3a03"         # dark orange
+  exec: "#9d0006"          # dark red
+  exec-sticky: "#8f3f71"   # dark purple
+
+  no-access: "#928374"     # quiet gray
+  octal: "#076678"         # dark blue
+  acl: "#8f3f71"           # dark purple
+  context: "#076678"       # dark blue
+
+date:
+  hour-old: "#8f3f71"  # purple: newest
+  day-old: "#076678"   # blue
+  older: "#928374"     # gray
+
+size:
+  none: "#928374"
+  small: "#427b58"     # green
+  medium: "#af3a03"    # orange
+  large: "#9d0006"     # red
+
+inode:
+  valid: "#8f3f71"
+  invalid: "#928374"
+
+links:
+  valid: "#076678"
+  invalid: "#9d0006"
+
+tree-edge: "#928374"
+
+git-status:
+  default: "#665c54"
+  unmodified: "#7c6f64"
+  ignored: "#928374"
+  new-in-index: "#79740e"
+  new-in-workdir: "#427b58"
+  typechange: "#8f3f71"
+  deleted: "#9d0006"
+  renamed: "#076678"
+  modified: "#af3a03"
+  conflicted: "#9d0006"

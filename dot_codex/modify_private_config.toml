@@ -1,0 +1,48 @@
+{{- /* chezmoi:modify-template */ -}}
+{{- /* Own only the paths below; preserve all other local Codex settings.
+       TOML serialization normalizes formatting and does not preserve comments. */ -}}
+{{- $config := dict -}}
+{{- if .chezmoi.stdin | trim -}}
+{{- $config = fromToml .chezmoi.stdin -}}
+{{- end -}}
+{{- $config |
+    setValueAtPath "personality" "pragmatic" |
+    setValueAtPath "approval_policy" "never" |
+    setValueAtPath "approvals_reviewer" "user" |
+    setValueAtPath "sandbox_mode" "danger-full-access" |
+    setValueAtPath "service_tier" "fast" |
+    setValueAtPath "plan_mode_reasoning_effort" "max" |
+    setValueAtPath "notice.hide_rate_limit_model_nudge" true |
+    setValueAtPath "features.multi_agent" true |
+    setValueAtPath "desktop.appearanceTheme" "system" |
+    setValueAtPath "desktop.appearanceLightCodeThemeId" "gruvbox" |
+    setValueAtPath "desktop.appearanceDarkCodeThemeId" "gruvbox" |
+    setValueAtPath "desktop.composerEnterBehavior" "cmdIfMultiline" |
+    setValueAtPath "desktop.preventSleepWhileRunning" true |
+    setValueAtPath "desktop.keepRemoteControlAwakeWhilePluggedIn" true |
+    setValueAtPath "desktop.notifications-permissions-enabled" true |
+    setValueAtPath "desktop.default-service-tier" "priority" |
+    setValueAtPath "desktop.followUpQueueMode" "steer" |
+    setValueAtPath "desktop.show-context-window-usage" true |
+    setValueAtPath "desktop.appearanceLightChromeTheme.accent" "#458588" |
+    setValueAtPath "desktop.appearanceLightChromeTheme.contrast" 45 |
+    setValueAtPath "desktop.appearanceLightChromeTheme.ink" "#3c3836" |
+    setValueAtPath "desktop.appearanceLightChromeTheme.opaqueWindows" false |
+    setValueAtPath "desktop.appearanceLightChromeTheme.surface" "#fbf1c7" |
+    setValueAtPath "desktop.appearanceLightChromeTheme.fonts" (dict) |
+    setValueAtPath "desktop.appearanceLightChromeTheme.semanticColors.diffAdded" "#3c3836" |
+    setValueAtPath "desktop.appearanceLightChromeTheme.semanticColors.diffRemoved" "#cc241d" |
+    setValueAtPath "desktop.appearanceLightChromeTheme.semanticColors.skill" "#b16286" |
+    setValueAtPath "desktop.appearanceDarkChromeTheme.accent" "#458588" |
+    setValueAtPath "desktop.appearanceDarkChromeTheme.contrast" 60 |
+    setValueAtPath "desktop.appearanceDarkChromeTheme.ink" "#ebdbb2" |
+    setValueAtPath "desktop.appearanceDarkChromeTheme.opaqueWindows" false |
+    setValueAtPath "desktop.appearanceDarkChromeTheme.surface" "#282828" |
+    setValueAtPath "desktop.appearanceDarkChromeTheme.fonts" (dict) |
+    setValueAtPath "desktop.appearanceDarkChromeTheme.semanticColors.diffAdded" "#ebdbb2" |
+    setValueAtPath "desktop.appearanceDarkChromeTheme.semanticColors.diffRemoved" "#cc241d" |
+    setValueAtPath "desktop.appearanceDarkChromeTheme.semanticColors.skill" "#b16286" |
+    setValueAtPath "tui.status_line" (list "model-with-reasoning" "current-dir" "project-name" "git-branch" "branch-changes" "run-state" "context-used" "five-hour-limit" "weekly-limit" "task-progress") |
+    setValueAtPath "tui.status_line_use_colors" true |
+    setValueAtPath "tui.theme" "gruvbox-light" |
+    toToml -}}

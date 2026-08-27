@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deep Dive Mechanism"
+  short_description: "Explain cross-file mechanisms and invariants"
+  default_prompt: "Use $deep-dive-mechanism to explain this cross-file mechanism, its invariants, lifecycle, failures, and implementation map."

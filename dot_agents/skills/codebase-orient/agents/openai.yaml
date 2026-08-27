@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codebase Orient"
+  short_description: "Map an unfamiliar repository before deep analysis"
+  default_prompt: "Use $codebase-orient to map this unfamiliar repository’s runtime architecture and propose a focused reading path."

@@ -1,0 +1,15 @@
+[git]
+    autoAdd = false
+    autoCommit = false
+    autoPush = false
+
+[hooks.edit.pre]
+    command = "python3"
+    args = ["{{ .chezmoi.sourceDir }}/scripts/chezmoi-edit-git.py", "pre"]
+
+[hooks.edit.post]
+    command = "python3"
+    args = ["{{ .chezmoi.sourceDir }}/scripts/chezmoi-edit-git.py", "post"]
+
+[data]
+    tmuxRole = {{ promptChoiceOnce . "tmuxRole" "tmux role" (list "client" "remote") | quote }}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Concurrency & Lifetime Audit"
+  short_description: "Prove synchronization, ownership, and lifetime"
+  default_prompt: "Use $concurrency-lifetime-audit to audit this code’s locks, references, ownership, teardown, races, and deadlock risks."

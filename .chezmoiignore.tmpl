@@ -2,6 +2,32 @@ README.md
 packages/
 scripts/
 
+# Pi configuration is managed, not credentials, conversations or installed packages.
+.pi/tasks/
+.pi/web-search-cache/
+.pi/*-usage.json
+.pi/*.jsonl
+.pi/agent/auth.json*
+.pi/agent/credentials.json*
+.pi/agent/models-store.json
+.pi/agent/*.jsonl
+.pi/agent/sessions/
+.pi/agent/missions/
+.pi/agent/cache/
+.pi/agent/npm/
+.pi/agent/git/
+.pi/agent/logs/
+.pi/agent/**/node_modules/
+.pi/agent/**/__pycache__/
+.local/share/ceph-kernel-workspace/backups/
+.local/share/ceph-kernel-workspace/**/__pycache__/
+
+{{- if ne .chezmoi.os "linux" }}
+.local/bin/setup-ceph-kernel-workspace.py
+.local/bin/git-submodule-cache.sh
+.local/share/ceph-kernel-workspace/
+{{- end }}
+
 {{- if ne .chezmoi.os "darwin" }}
 .config/karabiner/
 .local/bin/ssh-tunnel.sh

@@ -1,0 +1,31 @@
+CompileFlags:
+  Remove: [
+      -march=*,
+      -mabi=*,
+      -mcpu=*,
+      -fconserve-stack,
+      -fmin-function-alignment=16,
+      -fno-allow-store-data-races,
+      -mindirect-branch-register,
+      -mindirect-branch=thunk-extern,
+      -mpreferred-stack-boundary=3,
+      -fsanitize=*,
+      -mrecord-mcount,
+      -fno-new-ttp-matching,
+    ]
+---
+If:
+  PathMatch: '/mnt/mac/Volumes/build_part/ceph/.*/.*\.(cc|cpp|cxx|h|hpp)'
+CompileFlags:
+  Add:
+    - -include
+    - memory
+    - -include
+    - cstdint
+    - -DPTHREAD_STACK_MIN=131072
+---
+CompileFlags:
+  Add:
+    - -isystem
+    - /usr/lib/gcc/aarch64-redhat-linux/16/include
+

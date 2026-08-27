@@ -1,0 +1,4 @@
+interface:
+  display_name: "Function Forensics"
+  short_description: "Analyze one dense function by semantic weight"
+  default_prompt: "Use $function-forensics to analyze this function’s real contract, semantic hotspots, fallbacks, ownership, and downstream correction."

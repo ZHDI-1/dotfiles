@@ -1,0 +1,4 @@
+interface:
+  display_name: "Debug Hypothesis"
+  short_description: "Turn symptoms into ranked testable hypotheses"
+  default_prompt: "Use $debug-hypothesis to connect this symptom to ranked code-level hypotheses and the smallest decisive checks."

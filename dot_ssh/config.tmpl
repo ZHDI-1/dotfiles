@@ -24,31 +24,26 @@ Host 192.168.111.* 192.168.122.*
   UserKnownHostsFile /dev/null
   LogLevel ERROR
 
-Host utm-fedora
-  HostName 192.168.65.5
-  User zhdi
-  ServerAliveInterval 5
-  TCPKeepAlive yes
+Host relay
+	Hostname relay.corp.kuaishou.com
+	User zhuyiming
 
-Host utm-proxy-kuaishou
-  HostName 192.168.65.10
-  User zhdi
-  ServerAliveInterval 5
-  TCPKeepAlive yes
-
-
-Host localmbp
-  HostName localhost
-  User zhdi
-  ServerAliveInterval 5
-  TCPKeepAlive yes
-
-
-Host aliyun-server
+Host aliyun-chengdu
   Hostname 8.156.65.244
   User root
   Compression yes
 
+Host baidu-beijing
+  Hostname 106.12.147.22
+  User root
+  Compression yes
+
+Host azure-hk
+  HostName 20.6.131.153
+  User azureuser
+  AddKeysToAgent yes
+  ServerAliveInterval 5
+  TCPKeepAlive yes
 # Match host wkserver exec "true"
 # this fucking command extract the ssid of currently connected wifi
 # fucccccccccccccccccckkkkkkkkkkkkkkkkkkkkk you apple
@@ -57,7 +52,7 @@ Host aliyun-server
 Host jump-wkserver
   User zhdi
   HostName wanke-server.zhdi.top
-  ProxyJump aliyun-server
+  ProxyJump baidu-beijing
   Compression yes
 #
 #
@@ -79,7 +74,7 @@ Host make-funs
   User zhdi
   Compression yes
   ControlMaster no
-  ProxyJump wkserver
+  # ProxyJump wkserver
 
 Host win-server
   HostName 192.168.122.200
@@ -95,12 +90,6 @@ Host win-server
 
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<DAMN
 
-Host azure
-  HostName 20.6.131.153
-  User azureuser
-  AddKeysToAgent yes
-  ServerAliveInterval 5
-  TCPKeepAlive yes
 
 Host github.com
   HostName ssh.github.com

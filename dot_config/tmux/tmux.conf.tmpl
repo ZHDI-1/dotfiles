@@ -23,30 +23,47 @@ bind-key -r -T prefix M-l resize-pane -R 5
 bind-key -r -T prefix M-h resize-pane -L 5
 bind-key -T prefix o last-window
 
-# bind-key -T nvim-nav h select-pane -L
-# bind-key -T nvim-nav j select-pane -D
-# bind-key -T nvim-nav k select-pane -U
-# bind-key -T nvim-nav l select-pane -R
-#
-# bind-key -n C-w if-shell "tmux list-panes -F '#{pane_current_command}' | rg 'nvim'" "switch-client -T nvim-nav"
-# bind-key -T nvim-nav any switch-client -T root
 set -g monitor-bell on
 set -g bell-action any
-# set-hook -g alert-bell 'run-shell "afplay /System/Library/Sounds/Funk.aiff"'
 set -g default-shell /bin/zsh
 set -g default-command "/bin/zsh -l"
-
+set -g extended-keys on
+set -g extended-keys-format csi-u
 set -s set-clipboard on
 set-option -g xterm-keys on
 set -sg escape-time 0
 set -g default-terminal "tmux-256color"
 set -ag terminal-overrides ",xterm-256color:RGB"
+
+# Thin cyan focus borders; pane identity, copy mode, and a muted full path.
+set -g pane-border-style 'fg=colour238'
+set -g pane-active-border-style 'fg=colour81'
+set -g pane-border-lines single
+set -g pane-border-indicators colour
+set -g pane-border-status top
+set -g pane-border-format '#[align=right,fg=#{?pane_active,colour81,colour245},bg=default] #{pane_index}  #{pane_current_command}#{?#{==:#{pane_mode},copy-mode},#[fg=colour214] [COPY],}#[fg=colour245] · #{pane_current_path} #[default]'
+
+{{ if eq .tmuxRole "remote" }}
+set -g @trs-level pane
+set -g set-titles on
+set -g allow-set-title on
+set -g set-titles-string 'TRS:#{@trs-level}:remote'
+
+bind-key c new-window -c '#{pane_current_path}'
+bind-key % split-window -h -c '#{pane_current_path}'
+bind-key '"' split-window -c '#{pane_current_path}'
+
+
+bind-key R set-option -F @trs-level '#{?#{==:#{@trs-level},pane},window,pane}'
+bind-key C-r if-shell -F '#{==:#{@trs-level},session}' 'set-option -F @trs-level "#{?#{==:#{@trs-return-level},window},window,pane}"' 'set-option -F @trs-return-level "#{@trs-level}" ; set-option @trs-level session'
+
+{{ else if eq .tmuxRole "client" }}
+set -g allow-set-title on
 set -g @resurrect-capture-pane-contents 'on'
 set -g @resurrect-strategy-nvim 'session'
-set -g @continuum-restore 'on'
+set -g @continuum-restore 'off'
 set -g @tmux-remote-sessions-vim-navigation on
 set -g @tmux-remote-sessions-preserve-current-path on
-
 
 set-environment -g PATH "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
@@ -59,3 +76,7 @@ set -g @plugin 'tmux-plugins/tmux-continuum'
 if-shell 'test -d "$HOME/.config/tmux/plugins/tpm"' \
   'run-shell "$HOME/.config/tmux/plugins/tpm/tpm > $HOME/.config/tmux/log"' \
   'run-shell "git clone https://github.com/tmux-plugins/tpm \"$HOME/.config/tmux/plugins/tpm\" && \"$HOME/.config/tmux/plugins/tpm/tpm\""'
+
+{{ else }}
+{{ fail "tmuxRole must be client or remote" }}
+{{ end }}

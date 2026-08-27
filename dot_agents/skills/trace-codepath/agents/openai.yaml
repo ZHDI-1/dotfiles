@@ -1,0 +1,4 @@
+interface:
+  display_name: "Trace Codepath"
+  short_description: "Follow one operation through async completion"
+  default_prompt: "Use $trace-codepath to follow this operation through state changes, asynchronous handoffs, retries, and completion."

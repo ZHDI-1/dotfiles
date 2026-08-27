@@ -1,0 +1,161 @@
+{
+  "lastChangelogVersion": "0.85.1",
+  "theme": "light",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-6-astra",
+  "defaultThinkingLevel": "xhigh",
+  "showCacheMissNotices": true,
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 16384,
+    "keepRecentTokens": 20000
+  },
+  "packages": [
+    "npm:pi-ollama-cloud",
+    "npm:pi-interactive-shell",
+    "npm:pi-background-tasks",
+    "npm:pi-powerline-footer",
+    "npm:pi-subagents",
+    "npm:pi-web-access"
+  ],
+  "subagents": {
+    "defaultProvider": "openai-codex",
+    "defaultModel": "openai-codex/gpt-6-astra",
+    "defaultThinking": "high",
+    "modelScope": {
+      "enforce": true,
+      "strict": true,
+      "allow": [
+        "openai-codex/gpt-6-astra",
+        "ollama-cloud/kimi-k3"
+      ],
+      "agents": {
+        "scout": { "allow": ["openai-codex/gpt-6-astra"] },
+        "summarizer": { "allow": ["openai-codex/gpt-6-astra"] },
+        "researcher": { "allow": ["openai-codex/gpt-6-astra"] },
+        "reviewer": { "allow": ["openai-codex/gpt-6-astra"] },
+        "oracle": { "allow": ["openai-codex/gpt-6-astra"] },
+        "worker": { "allow": ["openai-codex/gpt-6-astra"] },
+        "delegate": { "allow": ["openai-codex/gpt-6-astra"] },
+        "k3-specialist": { "allow": ["ollama-cloud/kimi-k3"] }
+      }
+    },
+    "agentOverrides": {
+      "scout": {
+        "description": "GPT-6 medium-effort repository reconnaissance.",
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "medium",
+        "fallbackModels": []
+      },
+      "summarizer": {
+        "description": "GPT-6 low-effort summarization of logs, tool output, and research.",
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "low",
+        "fallbackModels": []
+      },
+      "researcher": {
+        "description": "GPT-6 extra-high-effort external documentation and web research specialist.",
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "xhigh",
+        "fallbackModels": []
+      },
+      "reviewer": {
+        "description": "GPT-6 extra-high-effort correctness, regression, edge-case, and test review.",
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "xhigh",
+        "fallbackModels": []
+      },
+      "oracle": {
+        "description": "GPT-6 maximum-effort second opinion for genuinely difficult decisions.",
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "max",
+        "fallbackModels": []
+      },
+      "worker": {
+        "description": "GPT-6 high-effort implementation worker for delegated coding tasks.",
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "high",
+        "fallbackModels": []
+      },
+      "delegate": {
+        "description": "GPT-6 high-effort general worker; choose a specialist for bounded work.",
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "high",
+        "fallbackModels": []
+      },
+      "k3-specialist": {
+        "description": "Kimi K3 for explicit requests or narrowly scoped authorized defensive technical work.",
+        "model": "ollama-cloud/kimi-k3",
+        "thinking": "max",
+        "fallbackModels": []
+      }
+    }
+  },
+  "powerline": {
+    "preset": "default",
+    "separator": "pipe",
+    "welcome": true,
+    "model": {
+      "display": "name",
+      "showThinkingLevel": false
+    },
+    "path": {
+      "mode": "abbreviated",
+      "maxLength": 32
+    },
+    "context": {
+      "format": "percent"
+    },
+    "cache_read": {
+      "format": "percent"
+    },
+    "customItems": [
+      {
+        "id": "codex_usage",
+        "statusKey": "dual-provider-codex-usage",
+        "position": "right",
+        "prefix": "Codex",
+        "color": "accent",
+        "hideWhenMissing": false,
+        "excludeFromExtensionStatuses": true
+      },
+      {
+        "id": "ollama_usage",
+        "statusKey": "dual-provider-ollama-usage",
+        "position": "right",
+        "prefix": "Ollama",
+        "color": "muted",
+        "hideWhenMissing": false,
+        "excludeFromExtensionStatuses": true
+      }
+    ],
+    "layout": {
+      "left": [
+        "model",
+        "thinking",
+        "path",
+        "git"
+      ],
+      "right": [
+        "context_pct",
+        "cache_read",
+        "custom:codex_usage",
+        "custom:ollama_usage"
+      ],
+      "secondary": [
+        "subagents",
+        "queue"
+      ]
+    },
+    "disabledSegments": [
+      "extension_statuses",
+      "cost",
+      "context_total",
+      "token_in",
+      "token_out",
+      "token_total",
+      "cache_write"
+    ]
+  },
+  "hideThinkingBlock": false
+}

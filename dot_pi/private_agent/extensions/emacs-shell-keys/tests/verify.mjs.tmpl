@@ -1,0 +1,420 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import test from 'node:test';
+
+const core = '{{ .chezmoi.homeDir }}/.local/share/fnm/node-versions/v24.18.0/installation/lib/node_modules/@earendil-works/pi-coding-agent';
+const shell = '{{ .chezmoi.homeDir }}/.pi/agent/npm/node_modules/pi-interactive-shell';
+const req = createRequire(`${core}/package.json`);
+const { createJiti } = req('jiti');
+const jiti = createJiti(import.meta.url, {
+  fsCache: false,
+  moduleCache: false,
+  alias: {
+    '@earendil-works/pi-tui': req.resolve('@earendil-works/pi-tui'),
+    '@earendil-works/pi-coding-agent': `${core}/dist/index.js`,
+  },
+});
+const tui = await import(req.resolve('@earendil-works/pi-tui'));
+const { KeybindingsManager } = await import(`${core}/dist/core/keybindings.js`);
+const { CustomEditor } = await import(`${core}/dist/modes/interactive/components/custom-editor.js`);
+const { InteractiveShellOverlay } = await jiti.import(`${shell}/overlay-component.ts`);
+const { ReattachOverlay } = await jiti.import(`${shell}/reattach-overlay.ts`);
+const { BashModeEditor } = await jiti.import('{{ .chezmoi.homeDir }}/.pi/agent/npm/node_modules/pi-powerline-footer/bash-mode/editor.ts');
+const extensionPath = new URL('../index.ts', import.meta.url).pathname;
+const { default: install } = await jiti.import(extensionPath);
+const { loadExtensions } = await import(`${core}/dist/core/extensions/loader.js`);
+const { createInteractiveTuiReference } = await import(`${core}/dist/modes/interactive/tui-renderer.js`);
+const { SessionSelectorComponent } = await import(`${core}/dist/modes/interactive/components/session-selector.js`);
+const { ScopedModelsSelectorComponent } = await import(`${core}/dist/modes/interactive/components/scoped-models-selector.js`);
+const { initTheme, getSelectListTheme, getSettingsListTheme } = await import(`${core}/dist/modes/interactive/theme/theme.js`);
+initTheme('dark', false);
+
+// Exercise real Pi input routing and original overlay handlers with a fake PTY.
+// No shell, agent, network request, or live terminal is started.
+function inputFixture(focused = null, mode = 'tui', focusInspection = true) {
+  const events = new Map(), widgets = new Map(), listeners = new Set();
+  function renderer(Class = tui.TuiMainScreen) {
+    const view = new Class({ rows: 30, columns: 100, write() {}, hideCursor() {} });
+    view.requestRender = () => {};
+    view.requestImmediateRender = () => {};
+    return view;
+  }
+  let view = renderer();
+  view.setFocus(focused);
+  const liveTui = focusInspection ? createInteractiveTuiReference(() => view) : {};
+  const ctx = {
+    mode, hasUI: mode === 'tui' || mode === 'rpc',
+    ui: {
+      setWidget(key, factory, options) {
+        widgets.get(key)?.component.dispose?.();
+        widgets.delete(key);
+        if (factory) widgets.set(key, { component: factory(liveTui, {}), options });
+      },
+      onTerminalInput(handler) {
+        listeners.add(handler);
+        let off = view.addInputListener(handler);
+        return () => { off(); view.removeInputListener(handler); listeners.delete(handler); };
+      },
+    },
+  };
+  install({ on(event, handler) { events.set(event, handler); } });
+  const f = {
+    ctx, events, widgets, listeners,
+    send(data) { view.handleTerminalInput(data); },
+    focus(component) { view.setFocus(component); },
+    start() { events.get('session_start')({ reason: 'startup' }, ctx); },
+    stop() { events.get('session_shutdown')({ reason: 'quit' }, ctx); },
+    switchRenderer() {
+      const target = view.getFocusedComponent();
+      for (const handler of listeners) view.removeInputListener(handler);
+      view = renderer(tui.TuiAltScreen);
+      view.setFocus(target);
+      for (const handler of listeners) view.addInputListener(handler);
+    },
+  };
+  f.start();
+  return f;
+}
+function overlayFixture(Class, state = 'running') {
+  const writes = [], actions = [];
+  const overlay = Object.create(Class.prototype);
+  Object.defineProperty(overlay, 'session', { value: {
+    exited: state === 'exited', rows: 20,
+    write(data) { writes.push(data); },
+    scrollUp() { actions.push('scroll-up'); },
+    scrollDown() { actions.push('scroll-down'); },
+  } });
+  Object.assign(overlay, {
+    state, userTookOver: false,
+    config: { focusShortcut: 'alt+shift+f' },
+    options: { onUnfocus() { actions.push('unfocus'); } },
+    tui: { requestRender() {} },
+    triggerUserTakeover() { this.state = 'running'; this.userTookOver = true; actions.push('takeover'); },
+    returnToHandsFree() { actions.push('monitor'); },
+    finishWithBackground() { actions.push('background'); },
+    finishWithTransfer() { actions.push('transfer'); },
+    finishWithExit() { actions.push('exit'); },
+    finishAndClose() { actions.push('exit'); },
+  });
+  return { overlay, writes, actions, ...inputFixture(overlay) };
+}
+
+for (const Class of [InteractiveShellOverlay, ReattachOverlay]) {
+  for (const data of ['\x02', '\x1b[98;5u', '\x1b[27;5;98~', '\x1b[98;5:1u', '\x1b[98;5:2u']) {
+    test(`${Class.name}: Ctrl+B ${JSON.stringify(data)} becomes Left Arrow`, () => {
+      const f = overlayFixture(Class);
+      f.send(data);
+      assert.deepEqual(f.writes, ['\x1b[D']);
+      assert.deepEqual(f.actions, []);
+      f.stop();
+    });
+  }
+  test(`${Class.name}: Ctrl+B release does not move or background`, () => {
+    const f = overlayFixture(Class);
+    f.send('\x1b[98;5:3u');
+    assert.deepEqual(f.writes, []);
+    assert.deepEqual(f.actions, []);
+    f.stop();
+  });
+  test(`${Class.name}: other keys and bracketed paste reach PTY unchanged`, () => {
+    const f = overlayFixture(Class);
+    const inputs = ['\x06', '\x10', '\x0e', '\x0a', '\r', '\x1b[13;2u',
+      '\x1b[98;6u', '\x1bb', '\x1b[98;7u', '\x1b[D', '\x1b[200~a\x02b\x1b[201~'];
+    for (const data of inputs) f.send(data);
+    assert.deepEqual(f.writes, inputs);
+    assert.deepEqual(f.actions, []);
+    f.stop();
+  });
+  test(`${Class.name}: underlying source still backgrounds without the override`, () => {
+    const f = overlayFixture(Class);
+    f.stop();
+    f.send('\x02');
+    assert.deepEqual(f.actions, ['background']);
+    assert.deepEqual(f.writes, []);
+  });
+  test(`${Class.name}: live TUI reference survives switch to fullscreen`, () => {
+    const f = overlayFixture(Class);
+    f.switchRenderer();
+    f.send('\x02');
+    assert.deepEqual(f.writes, ['\x1b[D']);
+    assert.deepEqual(f.actions, []);
+    f.stop();
+    assert.equal(f.listeners.size, 0);
+  });
+  test(`${Class.name}: Ctrl+Q menu still backgrounds`, () => {
+    const f = overlayFixture(Class);
+    f.send('\x11');
+    assert.equal(f.overlay.state, 'detach-dialog');
+    f.send('\x02'); // Still ignored inside the detach menu.
+    f.send('\x1b[B');
+    assert.equal(f.overlay.dialogSelection, 'background');
+    f.send('\r');
+    assert.deepEqual(f.actions, ['background']);
+    assert.deepEqual(f.writes, []);
+    f.stop();
+  });
+  test(`${Class.name}: transfer, scroll, menu cancellation unchanged`, () => {
+    const f = overlayFixture(Class);
+    f.send('\x1b[1;2A');
+    f.send('\x1b[1;2B');
+    f.send('\x11');
+    f.send('\x1b');
+    assert.equal(f.overlay.state, 'running');
+    f.send('\x14');
+    assert.deepEqual(f.actions, ['scroll-up', 'scroll-down', 'transfer']);
+    f.stop();
+  });
+}
+
+test('Hands-free Ctrl+B takes over and sends Left Arrow, without backgrounding', () => {
+  const f = overlayFixture(InteractiveShellOverlay, 'hands-free');
+  f.send('\x02');
+  assert.deepEqual(f.actions, ['takeover']);
+  assert.deepEqual(f.writes, ['\x1b[D']);
+  f.send('\x07');
+  assert.deepEqual(f.actions, ['takeover', 'monitor']);
+  f.stop();
+});
+
+test('Both installed overlay source files exactly match the originals', () => {
+  const backup = '{{ .chezmoi.homeDir }}/.pi/agent/cache/interactive-shell-ctrl-b-backup.lrvPAw';
+  for (const file of ['overlay-component.ts', 'reattach-overlay.ts']) {
+    assert.deepEqual(readFileSync(`${shell}/${file}`), readFileSync(`${backup}/${file}`));
+  }
+});
+
+test('Pi native loader loads the local extension without registering any tools or shortcuts', async () => {
+  const loaded = await loadExtensions([extensionPath], process.cwd());
+  assert.deepEqual(loaded.errors, []);
+  assert.equal(loaded.extensions.length, 1);
+  const ext = loaded.extensions[0];
+  assert.equal(ext.tools.size, 0);
+  assert.equal(ext.shortcuts.size, 0);
+  assert.equal(ext.commands.size, 0);
+  assert.deepEqual([...ext.handlers.keys()].sort(), ['session_shutdown', 'session_start']);
+});
+
+test('No focus, ordinary dialogs and shell unfocus leave Ctrl+B unchanged', () => {
+  const seen = [];
+  const dialog = { handleInput(data) { seen.push(data); } };
+  const f = overlayFixture(InteractiveShellOverlay);
+  f.focus(null); f.send('\x02');
+  f.focus(dialog); f.send('\x02'); f.send('\x1b[98;5u');
+  assert.deepEqual(seen, ['\x02', '\x1b[98;5u']);
+  assert.deepEqual(f.writes, []);
+  f.focus(f.overlay); f.send('\x02');
+  assert.deepEqual(f.writes, ['\x1b[D']);
+  f.stop();
+});
+
+test('Detach, exited and unknown shell states are not rewritten', () => {
+  for (const Class of [InteractiveShellOverlay, ReattachOverlay]) {
+    for (const state of ['detach-dialog', 'exited', 'future-state']) {
+      const overlay = Object.create(Class.prototype), seen = [];
+      Object.assign(overlay, { state, handleInput(data) { seen.push(data); } });
+      const f = inputFixture(overlay);
+      f.send('\x02');
+      assert.deepEqual(seen, ['\x02']);
+      f.stop();
+    }
+  }
+});
+
+test('Missing runtime focus API leaves input untouched without throwing', () => {
+  const seen = [];
+  const f = inputFixture({ handleInput(data) { seen.push(data); } }, 'tui', false);
+  f.send('\x02');
+  assert.deepEqual(seen, ['\x02']);
+  f.stop();
+});
+
+test('Widget is invisible; repeated startup and shutdown do not leak input listeners', () => {
+  const f = inputFixture();
+  for (let i = 0; i < 3; i++) {
+    f.start();
+    assert.equal(f.listeners.size, 1);
+    assert.equal(f.widgets.size, 1);
+    const widget = [...f.widgets.values()][0];
+    assert.equal(widget.options.placement, 'belowEditor');
+    assert.deepEqual(widget.component.render(80), []);
+    assert.equal(widget.component.handleInput, undefined);
+  }
+  f.stop(); f.stop();
+  assert.equal(f.listeners.size, 0);
+  assert.equal(f.widgets.size, 0);
+});
+
+for (const mode of ['rpc', 'json', 'print']) {
+  test(`No terminal hooks or widgets in ${mode} mode`, () => {
+    const f = inputFixture(null, mode);
+    assert.equal(f.listeners.size, 0);
+    assert.equal(f.widgets.size, 0);
+    f.stop();
+  });
+}
+
+const expected = {
+  'app.model.cycleForward': [],
+  'tui.editor.historyPrevious': 'ctrl+p',
+  'tui.editor.historyNext': 'ctrl+n',
+  'tui.input.newLine': ['shift+enter', 'ctrl+j'],
+  'tui.input.submit': 'enter',
+  'tui.select.down': ['down', 'ctrl+n'],
+  'tui.select.up': ['up', 'ctrl+p'],
+  'app.session.toggleNamedFilter': 'alt+n',
+  'app.session.togglePath': 'alt+p',
+  'app.models.toggleProvider': 'ctrl+alt+p',
+};
+const bindings = KeybindingsManager.create('{{ .chezmoi.homeDir }}/.pi/agent');
+
+test('Only requested keybinding overrides exist; all other effective bindings unchanged', () => {
+  assert.deepEqual(JSON.parse(readFileSync('{{ .chezmoi.homeDir }}/.pi/agent/keybindings.json', 'utf8')), expected);
+  const defaults = new KeybindingsManager().getEffectiveConfig();
+  const current = bindings.getEffectiveConfig();
+  for (const [action, keys] of Object.entries(defaults)) {
+    if (!(action in expected)) assert.deepEqual(current[action], keys, action);
+  }
+  assert.equal(bindings.matches('\x10', 'app.model.cycleForward'), false);
+  assert.equal(bindings.matches('\x02', 'tui.editor.cursorLeft'), true);
+});
+
+test('Menu navigation aliases do not trigger picker toggles', () => {
+  assert.ok(bindings.matches('\x0e', 'tui.select.down'));
+  assert.ok(bindings.matches('\x10', 'tui.select.up'));
+  assert.ok(bindings.matches('\x1b[B', 'tui.select.down'));
+  assert.ok(bindings.matches('\x1b[A', 'tui.select.up'));
+  for (const action of ['app.session.toggleNamedFilter', 'app.session.togglePath', 'app.models.toggleProvider']) {
+    assert.equal(bindings.matches('\x0e', action), false);
+    assert.equal(bindings.matches('\x10', action), false);
+  }
+  assert.ok(bindings.matches('\x1bn', 'app.session.toggleNamedFilter'));
+  assert.ok(bindings.matches('\x1bp', 'app.session.togglePath'));
+  assert.ok(bindings.matches('\x1b\x10', 'app.models.toggleProvider'));
+  assert.equal(bindings.matches('\x1b\x10', 'app.models.reorderUp'), false);
+});
+
+test('Native SelectList accepts Ctrl+N/P, arrows and enhanced terminal sequences', () => {
+  tui.setKeybindings(bindings);
+  const list = new tui.SelectList(['a', 'b', 'c'].map(value => ({ value, label: value })), 5, getSelectListTheme());
+  for (const [down, up] of [['\x0e', '\x10'], ['\x1b[B', '\x1b[A'], ['\x1b[110;5u', '\x1b[112;5u']]) {
+    list.setSelectedIndex(0);
+    list.handleInput(down); assert.equal(list.getSelectedItem().value, 'b');
+    list.handleInput(up); assert.equal(list.getSelectedItem().value, 'a');
+  }
+});
+
+test('Native settings list moves selection without changing values until Enter', () => {
+  tui.setKeybindings(bindings);
+  const changes = [];
+  const list = new tui.SettingsList(['a', 'b', 'c'].map(id => ({ id, label: id, currentValue: 'off', values: ['off', 'on'] })),
+    5, getSettingsListTheme(), (...args) => changes.push(args), () => {});
+  list.handleInput('\x0e'); assert.deepEqual(changes, []);
+  list.handleInput('\r'); assert.deepEqual(changes, [['b', 'on']]);
+  list.handleInput('\x10'); list.handleInput('\r');
+  assert.deepEqual(changes, [['b', 'on'], ['a', 'on']]);
+});
+
+test('Native resume picker navigates with Ctrl+N/P; filters and path display use Alt', async () => {
+  tui.setKeybindings(bindings);
+  const sessions = ['a', 'b', 'c'].map((id, i) => ({
+    id, path: `/nonexistent/pi-menu-test/${id}.jsonl`, cwd: '/nonexistent/pi-menu-test',
+    created: new Date(3000 - i * 1000), modified: new Date(3000 - i * 1000),
+    messageCount: 2, firstMessage: id, name: i === 0 ? 'Named session' : undefined,
+  }));
+  const loaded = Promise.resolve(sessions), chosen = [];
+  const picker = new SessionSelectorComponent(() => loaded, () => loaded, path => chosen.push(path),
+    () => {}, () => {}, () => {}, { keybindings: bindings });
+  await loaded; // The constructor's loadScope continuation was registered first.
+  picker.handleInput('\x0e'); picker.handleInput('\r');
+  picker.handleInput('\x10'); picker.handleInput('\r');
+  assert.deepEqual(chosen, [sessions[1].path, sessions[0].path]);
+  assert.equal(picker.nameFilter, 'all'); assert.equal(picker.sessionList.showPath, false);
+  picker.handleInput('\x1bn'); assert.equal(picker.nameFilter, 'named');
+  picker.handleInput('\x1bp'); assert.equal(picker.sessionList.showPath, true);
+});
+
+test('Native scoped-model picker navigates without toggling providers; Ctrl+Alt+P toggles', () => {
+  tui.setKeybindings(bindings);
+  const changes = [];
+  const allModels = ['a', 'b', 'c'].map(id => ({ id, name: id, provider: 'test', reasoning: false,
+    api: 'openai-completions', baseUrl: 'http://invalid', input: ['text'], contextWindow: 8192, maxTokens: 1024,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }));
+  const picker = new ScopedModelsSelectorComponent({ allModels, enabledModelIds: null }, {
+    onChange: ids => changes.push(ids), onPersist: () => assert.fail('Unexpected settings save'), onCancel() {},
+  });
+  picker.handleInput('\x0e'); assert.equal(picker.selectedIndex, 1);
+  picker.handleInput('\x10'); assert.equal(picker.selectedIndex, 0);
+  assert.deepEqual(changes, []);
+  picker.handleInput('\x1b\x10'); assert.deepEqual(changes, [[]]);
+  picker.handleInput('\x1b\x10'); assert.deepEqual(changes, [[], null]);
+});
+
+function editorFixture(Class) {
+  tui.setKeybindings(bindings);
+  const terminal = { requestRender() {}, terminal: { rows: 30, columns: 100 } };
+  const theme = { borderColor: s => s, selectList: {} };
+  const options = {
+    keybindings: bindings, isBashModeActive: () => false, isShellRunning: () => false,
+    onExitBashMode() {}, onSubmitCommand() {}, onInterrupt() {}, onNotify() {},
+    getHistoryEntries: () => [], areCompletionsEnabled: () => false,
+    resolveGhostSuggestion: async () => null,
+  };
+  return new Class(terminal, theme, bindings, options);
+}
+
+for (const Class of [CustomEditor, BashModeEditor]) {
+  test(`${Class.name}: raw override preserves Ctrl+B and Ctrl+P/N in the main prompt`, () => {
+    const editor = editorFixture(Class);
+    const f = inputFixture(editor);
+    editor.onAction('app.model.cycleForward', () => assert.fail('cycled model'));
+    editor.addToHistory('older');
+    editor.setText('draft');
+    f.send('\x02');
+    assert.deepEqual(editor.getCursor(), { line: 0, col: 4 });
+    f.send('\x10'); assert.equal(editor.getText(), 'older');
+    f.send('\x0e'); assert.equal(editor.getText(), 'draft');
+    f.stop();
+  });
+  test(`${Class.name}: Ctrl+P/N navigate an open completion menu instead of prompt history`, () => {
+    const editor = editorFixture(Class);
+    editor.addToHistory('older prompt'); editor.setText('/');
+    editor.applyAutocompleteSuggestions({ prefix: '/', items: ['aa', 'bb', 'cc'].map(value => ({ value, label: value })) }, 'regular');
+    editor.handleInput('\x0e'); assert.equal(editor.autocompleteList.getSelectedItem().value, 'bb');
+    editor.handleInput('\x10'); assert.equal(editor.autocompleteList.getSelectedItem().value, 'aa');
+    assert.equal(editor.getText(), '/');
+  });
+  test(`${Class.name}: Ctrl+P/N browse history and restore multiline draft`, () => {
+    const editor = editorFixture(Class);
+    editor.onAction('app.model.cycleForward', () => assert.fail('cycled model'));
+    editor.addToHistory('first'); editor.addToHistory('second');
+    editor.setText('draft\nmultiline');
+    editor.handleInput('\x10'); assert.equal(editor.getText(), 'second');
+    editor.handleInput('\x10'); assert.equal(editor.getText(), 'first');
+    editor.handleInput('\x0e'); assert.equal(editor.getText(), 'second');
+    editor.handleInput('\x0e'); assert.equal(editor.getText(), 'draft\nmultiline');
+  });
+  test(`${Class.name}: Ctrl+B remains cursor-left`, () => {
+    const editor = editorFixture(Class);
+    editor.setText('ab'); editor.handleInput('\x02');
+    assert.deepEqual(editor.getCursor(), { line: 0, col: 1 });
+  });
+  for (const enhanced of [false, true]) {
+    test(`${Class.name}: Shift+Enter/Ctrl+J newline and Enter submit (enhanced=${enhanced})`, () => {
+      tui.setKittyProtocolActive(enhanced);
+      const editor = editorFixture(Class);
+      const submissions = [];
+      editor.onSubmit = text => submissions.push(text);
+      editor.setText('a');
+      editor.handleInput('\x0a');
+      assert.equal(editor.getText(), 'a\n');
+      editor.handleInput('\x1b[13;2u');
+      assert.equal(editor.getText(), 'a\n\n');
+      editor.handleInput('b');
+      assert.deepEqual(submissions, []);
+      editor.handleInput('\r');
+      assert.deepEqual(submissions, ['a\n\nb']);
+      tui.setKittyProtocolActive(false);
+    });
+  }
+}

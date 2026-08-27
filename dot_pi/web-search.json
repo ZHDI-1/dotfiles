@@ -1,0 +1,7 @@
+{
+  "provider": "openai",
+  "openaiSearchProviders": ["openai-codex"],
+  "openaiSearchModel": "gpt-5.6-terra",
+  "summaryModel": "openai-codex/gpt-5.6-luna:medium",
+  "workflow": "summary-review"
+}

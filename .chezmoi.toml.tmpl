@@ -13,3 +13,5 @@
 
 [data]
     tmuxRole = {{ promptChoiceOnce . "tmuxRole" "tmux role" (list "client" "remote") | quote }}
+    gitName = {{ promptStringOnce . "gitName" "Git user name" | quote }}
+    gitEmail = {{ promptStringOnce . "gitEmail" "Git email" | quote }}

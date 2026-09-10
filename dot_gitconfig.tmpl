@@ -1,0 +1,20 @@
+[core]
+	excludesfile = ~/.gitignore_global
+
+# Large-repository defaults. Existing indexes need an explicit
+# `git update-index --index-version=4` in each repository to convert.
+[index]
+	version = 4
+	threads = 0
+[fetch]
+	writeCommitGraph = true
+
+[user]
+	name = {{ .gitName | quote }}
+	email = {{ .gitEmail | quote }}
+[credential "https://github.com"]
+	helper =
+	helper = !gh auth git-credential
+[credential "https://gist.github.com"]
+	helper =
+	helper = !gh auth git-credential

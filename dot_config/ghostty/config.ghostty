@@ -10,7 +10,6 @@ adjust-cell-height = 4
 
 # Window
 maximize = true
-title = " "
 background-opacity = 0.80
 background-opacity-cells = true
 background-blur = true
@@ -22,8 +21,8 @@ scrollback-limit = 10000
 
 # Shell
 command = /opt/homebrew/bin/tmux new-session -A
-term = xterm-256color
-env = TERM=xterm-256color
+term = xterm-ghostty
+progress-style = true
 
 # Colors
 background = #282829
@@ -54,6 +53,8 @@ palette = 15=#bdae93
 
 # Selection
 copy-on-select = clipboard
+clipboard-write = allow
+clipboard-read = allow
 
 # Keybindings
 keybind = clear

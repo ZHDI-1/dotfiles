@@ -27,20 +27,30 @@ set -g monitor-bell on
 set -g bell-action any
 set -g default-shell /bin/zsh
 set -g default-command "/bin/zsh -l"
-set -g extended-keys on
-set -g extended-keys-format csi-u
+# Capabilities do not enable application modes by themselves.
+set -s extended-keys on
+set -s extended-keys-format csi-u
+set -s focus-events on
 set -s set-clipboard on
+set -g mouse off
+set -g set-titles on
 set-option -g xterm-keys on
 set -sg escape-time 0
 set -g default-terminal "tmux-256color"
 set -ag terminal-overrides ",xterm-256color:RGB"
+set -s input-buffer-size 8388608
+
+set -s terminal-features[10] 'xterm-ghostty:256:RGB:bpaste:ccolour:clipboard:hyperlinks:cstyle:extkeys:focus:margins:osc7:overline:progressbar:strikethrough:sync:title:usstyle'
+set -s terminal-features[11] 'tmux-256color:256:RGB:bpaste:ccolour:clipboard:hyperlinks:cstyle:extkeys:focus:osc7:overline:progressbar:strikethrough:sync:title:usstyle'
 
 # Thin cyan focus borders; pane identity, copy mode, and a muted full path.
 set -g pane-border-style 'fg=colour238'
 set -g pane-active-border-style 'fg=colour81'
 set -g pane-border-lines single
 set -g pane-border-indicators colour
-set -g pane-border-status top
+# Reserve the header row only when multiple panes are visible.
+set -g pane-border-status off
+set-hook -g window-layout-changed[10] 'set-option -wF pane-border-status "#{?#{||:#{==:#{window_panes},1},#{window_zoomed_flag}},off,top}"'
 set -g pane-border-format '#[align=right,fg=#{?pane_active,colour81,colour245},bg=default] #{pane_index}  #{pane_current_command}#{?#{==:#{pane_mode},copy-mode},#[fg=colour214] [COPY],}#[fg=colour245] · #{pane_current_path} #[default]'
 
 {{ if eq .tmuxRole "remote" }}

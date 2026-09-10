@@ -107,15 +107,29 @@ Manage the mount:
 
 ```sh
 setup-ceph-kernel-workspace.py status WORKSPACE
+setup-ceph-kernel-workspace.py resume WORKSPACE --dry-run
+setup-ceph-kernel-workspace.py resume WORKSPACE
 setup-ceph-kernel-workspace.py refresh WORKSPACE --dry-run
 setup-ceph-kernel-workspace.py refresh WORKSPACE
 setup-ceph-kernel-workspace.py unmount WORKSPACE
 ```
 
+After reboot or an ordinary unmount, use `resume WORKSPACE` to restore the
+recorded layers and workdir. It leaves company `src/compile_commands.json` and
+`.clangd` untouched: no database parsing, transformation, copying, or backups.
+It requires saved workspace state and an existing regular, non-symlink database
+in company `src`, but not the original input database, `.clangd` source, or GCC
+include directory. An already-active matching mount is reused; foreign mounts
+are still refused. `--dry-run` checks without mounting or writing anything.
+
+Resume assumes the existing database is still appropriate; it does not check
+its contents or freshness. If paths or build configuration changed, regenerate
+with `refresh` after resuming, or repeat `mount` instead. If the generated
+database is missing, use `mount` to regenerate it.
+
 `refresh` requires an active matching mount and reuses saved options. Repeating
 `mount` with matching layers also refreshes the database; provide any desired
-non-default options again. Layer changes require a separate workspace. After
-ordinary unmounting, the same mount command can reuse the recorded workdir.
+non-default options again. Layer changes require a separate workspace.
 Close buffers/processes using the mount before unmounting. A busy unmount fails
 normally; the script never uses lazy/forced unmounts or deletes source files.
 
@@ -161,7 +175,8 @@ The original input is unchanged unless it is explicitly also the output.
 ## Failure behavior
 
 - Invalid paths, unsafe output symlinks, conflicting mounts, nonempty mountpoints,
-  unowned nonempty workdirs, or malformed databases are rejected.
+  unowned nonempty workdirs, or malformed input databases (during generation)
+  are rejected. Resume checks the generated database's file type, not its contents.
 - A foreign mount is never refreshed or unmounted.
 - State is persisted before mounting, then updated with the actual mount
   ID/device, boot ID, and mount namespace. Those identifiers prevent treating

@@ -19,6 +19,7 @@ make
 mercurial
 mosh
 neovim
+netcat
 openvpn
 perl-FindBin
 python3

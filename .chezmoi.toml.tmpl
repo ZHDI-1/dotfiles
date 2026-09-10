@@ -15,3 +15,4 @@
     tmuxRole = {{ promptChoiceOnce . "tmuxRole" "tmux role" (list "client" "remote") | quote }}
     gitName = {{ promptStringOnce . "gitName" "Git user name" | quote }}
     gitEmail = {{ promptStringOnce . "gitEmail" "Git email" | quote }}
+    githubUseProxy = {{ promptBoolOnce . "githubUseProxy" "Use an explicit proxy for GitHub SSH (no for TUN/direct access)" true }}

@@ -41,7 +41,6 @@ alias codexs='_codexside'
 
 # Keep cat on the system binary while syspolicyd/Homebrew exec checks are unstable.
 # alias cat='bat'
-alias rsync-firefox='rsync /Applications/Firefox.app/Contents/Resources/config.cfg /Users/zhdi/develop/firefox-hack/backup-configjs/config.cfg'
 
 structlk() {
   ggrep -PriIzo "\\s*$1\\s*\\{\\n((?!};).*\\n)*\\};\\n" "$2"

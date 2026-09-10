@@ -326,6 +326,186 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(record["source"], "ceph-kernel-test")
 
 
+class ResumeTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="overlay-resume-test-")
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+        self.plan = fixture(self.base)
+        self.workspace = Path(self.plan["workspace"])
+        self.workspace.mkdir()
+        self.database = write(
+            Path(self.plan["upper"]) / "compile_commands.json", "[]\n"
+        )
+        self.clangd = write(
+            Path(self.plan["upper"]) / ".clangd", "# keep editor config\n"
+        )
+        self.plan["clangd_config"] = str(
+            write(self.base / "input.clangd", "# original\n")
+        )
+        self.plan["gcc_include"] = str(self.base / "gcc/include")
+        write(Path(self.plan["gcc_include"]) / "stdarg.h")
+        write(Path(self.plan["workdir"]) / "scratch", "retained")
+        self.record = {
+            "target": self.plan["merged"],
+            "source": "fuse-overlayfs",
+            "type": "fuse.fuse-overlayfs",
+            "id": "91",
+            "device": "0:45",
+            "root": "/",
+            "boot_id": "new-boot",
+            "namespace": "mnt:[200]",
+        }
+        self.plan["mounted"] = dict(
+            self.record, boot_id="old-boot", namespace="mnt:[100]"
+        )
+        setup.persist(self.plan)
+        self.before = self.generated_snapshot()
+        self.records = []
+        self.output = io.StringIO()
+        patches = (
+            mock.patch.object(setup, "mount_records", return_value=self.records),
+            mock.patch.object(setup.shutil, "which", return_value="/tool"),
+            mock.patch.object(
+                setup, "editor_command", side_effect=AssertionError("editor called")
+            ),
+            mock.patch.object(setup, "run", side_effect=self.execute),
+        )
+        for patch in patches:
+            self.addCleanup(patch.stop)
+            result = patch.start()
+        self.run = result
+
+    def execute(self, command, **kwargs):
+        if command[0] == "fuse-overlayfs":
+            self.records.append(self.record)
+        elif command[0] == "fusermount3":
+            self.records.clear()
+        else:
+            self.fail(f"unexpected command during resume: {command}")
+
+    def generated_snapshot(self):
+        return {
+            path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+            for path in (self.database, self.clangd)
+        }
+
+    def resume(self, *options):
+        with (
+            contextlib.redirect_stdout(self.output),
+            contextlib.redirect_stderr(self.output),
+        ):
+            return setup.main(["resume", str(self.workspace), *options])
+
+    def test_resume_after_reboot_preserves_files_and_records_new_identity(self):
+        self.assertEqual(self.resume(), 0, self.output.getvalue())
+        self.run.assert_called_once_with(
+            [
+                "fuse-overlayfs",
+                "-o",
+                (
+                    f"lowerdir={self.plan['kernel']},upperdir={self.plan['upper']},"
+                    f"workdir={self.plan['workdir']}"
+                ),
+                self.plan["merged"],
+            ],
+            timeout=30,
+        )
+        saved = setup.load_state(self.workspace)
+        self.assertEqual(saved["mounted"], self.record)
+        self.assertEqual(setup.load_owner(saved), saved)
+        self.assertEqual(self.generated_snapshot(), self.before)
+        self.assertFalse((self.workspace / "backups").exists())
+        self.assertEqual(
+            (Path(self.plan["workdir"]) / "scratch").read_text(), "retained"
+        )
+        with contextlib.redirect_stdout(self.output):
+            self.assertEqual(setup.main(["unmount", str(self.workspace)]), 0)
+        self.assertEqual(self.records, [])
+
+    def test_resume_does_not_need_original_generation_inputs(self):
+        Path(self.plan["database"]).unlink()
+        Path(self.plan["clangd_config"]).unlink()
+        (Path(self.plan["gcc_include"]) / "stdarg.h").unlink()
+        with mock.patch.object(setup, "EDITOR", self.base / "missing-editor.py"):
+            self.assertEqual(self.resume(), 0, self.output.getvalue())
+        self.assertEqual(self.generated_snapshot(), self.before)
+
+    def test_resume_already_mounted_does_not_remount(self):
+        self.records.append(self.record)
+        self.plan["mounted"] = self.record
+        setup.persist(self.plan)
+        self.assertEqual(self.resume(), 0, self.output.getvalue())
+        self.run.assert_not_called()
+        self.assertEqual(self.generated_snapshot(), self.before)
+
+    def test_resume_dry_run_does_not_write_or_mount(self):
+        state = setup.state_path(self.workspace).read_bytes()
+        owner = setup.owner_path(self.plan).read_bytes()
+        self.assertEqual(self.resume("--dry-run"), 0, self.output.getvalue())
+        self.run.assert_not_called()
+        self.assertEqual(setup.state_path(self.workspace).read_bytes(), state)
+        self.assertEqual(setup.owner_path(self.plan).read_bytes(), owner)
+        self.assertFalse(Path(self.plan["merged"]).exists())
+        self.assertFalse(
+            (Path(self.plan["client"]) / ".ceph-kernel-overlay.lock").exists()
+        )
+        self.assertEqual(self.generated_snapshot(), self.before)
+
+    def test_resume_requires_saved_state(self):
+        setup.state_path(self.workspace).unlink()
+        self.assertEqual(self.resume(), 1)
+        self.assertIn("use the mount command first", self.output.getvalue())
+        self.run.assert_not_called()
+
+    def test_resume_requires_generated_upper_database(self):
+        self.database.unlink()  # The lower's input database is not a substitute.
+        self.assertEqual(self.resume(), 1)
+        self.assertIn("use mount to regenerate", self.output.getvalue())
+        self.run.assert_not_called()
+
+    def test_resume_refuses_unsafe_generated_database(self):
+        self.database.unlink()
+        for kind in ("symlink", "directory"):
+            with self.subTest(kind=kind):
+                if kind == "symlink":
+                    self.database.symlink_to(self.plan["database"])
+                else:
+                    self.database.mkdir()
+                self.assertEqual(self.resume(), 1)
+                self.assertIn("unsafe overlay output", self.output.getvalue())
+                self.run.assert_not_called()
+                if kind == "symlink":
+                    self.database.unlink()
+                else:
+                    self.database.rmdir()
+
+    def test_resume_refuses_foreign_mount_even_with_reused_mount_id(self):
+        self.records.append(self.record)  # Same ID, but saved state is from old boot.
+        self.assertEqual(self.resume(), 1)
+        self.assertIn("unrecognized existing mount", self.output.getvalue())
+        self.run.assert_not_called()
+
+    def test_resume_refuses_nonempty_mountpoint(self):
+        write(Path(self.plan["merged"]) / "important", "keep")
+        self.assertEqual(self.resume(), 1)
+        self.assertIn("mountpoint must be empty", self.output.getvalue())
+        self.run.assert_not_called()
+
+    def test_failed_resume_cleans_up_new_mount(self):
+        def fail_after_mount(command, **kwargs):
+            self.execute(command, **kwargs)
+            if command[0] == "fuse-overlayfs":
+                raise setup.SetupError("mount failed after attaching")
+
+        self.run.side_effect = fail_after_mount
+        self.assertEqual(self.resume(), 1)
+        self.assertIn("mount failed after attaching", self.output.getvalue())
+        self.assertEqual(self.records, [])
+        self.assertEqual(self.run.call_count, 2)
+        self.assertEqual(self.generated_snapshot(), self.before)
+
+
 @unittest.skipUnless(
     os.environ.get("RUN_FUSE_TESTS") == "1",
     "set RUN_FUSE_TESTS=1 for isolated real FUSE tests",
@@ -401,8 +581,30 @@ class RealFuseTests(unittest.TestCase):
                 timeout=30,
             )
             self.assertFalse(os.path.ismount(merged))
-            # Reuse state/workdir safely after an ordinary unmount.
-            subprocess.run(command, check=True, timeout=120)
+            # Resume reuses state/workdir and leaves generated files untouched.
+            database_bytes = (upper / "compile_commands.json").read_bytes()
+            database_stat = (upper / "compile_commands.json").stat()
+            clangd = write(upper / ".clangd", "# retained across resume\n")
+            clangd_stat = clangd.stat()
+            backups = sorted((workspace / "backups").iterdir())
+            for _ in range(2):  # Also idempotent while already mounted.
+                subprocess.run(
+                    [sys.executable, str(SCRIPT), "resume", str(workspace)],
+                    check=True,
+                    timeout=30,
+                )
+                self.assertTrue(os.path.ismount(merged))
+                self.assertEqual(
+                    (merged / "compile_commands.json").read_bytes(), database_bytes
+                )
+                resumed_stat = (upper / "compile_commands.json").stat()
+                self.assertEqual(resumed_stat.st_mtime_ns, database_stat.st_mtime_ns)
+                self.assertEqual(resumed_stat.st_ino, database_stat.st_ino)
+                self.assertEqual(
+                    (merged / ".clangd").read_text(), "# retained across resume\n"
+                )
+                self.assertEqual(clangd.stat().st_mtime_ns, clangd_stat.st_mtime_ns)
+                self.assertEqual(sorted((workspace / "backups").iterdir()), backups)
             subprocess.run(
                 [sys.executable, str(SCRIPT), "unmount", str(workspace)],
                 check=True,

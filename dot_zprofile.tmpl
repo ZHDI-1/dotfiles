@@ -20,6 +20,11 @@ source ~/.orbstack/shell/init.zsh 2>/dev/null || :
 [[ -r "${HOME}/.swiftly/env.sh" ]] && . "${HOME}/.swiftly/env.sh"
 {{ end -}}
 
+# Host-only environment overrides, followed by credentials.
+if [[ -r "${HOME}/.config/zsh/env.local.zsh" ]]; then
+  source "${HOME}/.config/zsh/env.local.zsh"
+fi
+
 if [[ -r "${HOME}/.config/zsh/secrets.local.zsh" ]]; then
   source "${HOME}/.config/zsh/secrets.local.zsh"
 fi

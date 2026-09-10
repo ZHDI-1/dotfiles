@@ -230,7 +230,7 @@ def describe(plan):
     )
 
 
-def validate(plan, previous=None):
+def validate(plan, previous=None, *, resume=False):
     kernel, client, upper, workspace, merged, workdir = (
         Path(plan[k]) for k in IDENTITY_KEYS
     )
@@ -245,11 +245,12 @@ def validate(plan, previous=None):
         raise SetupError(
             "company src must be a real directory directly below the client repository"
         )
-    require_file(Path(plan["database"]))
-    if plan.get("clangd_config"):
-        require_file(Path(plan["clangd_config"]))
-    if plan.get("gcc_include"):
-        require_file(Path(plan["gcc_include"]) / "stdarg.h")
+    if not resume:
+        require_file(Path(plan["database"]))
+        if plan.get("clangd_config"):
+            require_file(Path(plan["clangd_config"]))
+        if plan.get("gcc_include"):
+            require_file(Path(plan["gcc_include"]) / "stdarg.h")
     if overlaps(kernel, client):
         raise SetupError("kernel and company repositories must not overlap")
     if any(overlaps(workspace, root) for root in (kernel, client)):
@@ -305,6 +306,14 @@ def validate(plan, previous=None):
         visible = destination if os.path.lexists(destination) else kernel / name
         if visible.is_symlink() or (visible.exists() and not visible.is_file()):
             raise SetupError(f"unsafe overlay output: {visible}")
+        if resume:
+            # Reuse the generated upper file, never the unmapped lower database.
+            # Only check its type: resuming must not read/transform the full JSON.
+            if name == "compile_commands.json" and not destination.is_file():
+                raise SetupError(
+                    f"no generated database at {destination}; use mount to regenerate it"
+                )
+            continue
         input_path = Path(
             plan["database"]
             if name == "compile_commands.json"
@@ -353,21 +362,22 @@ def unmount(plan):
     )
 
 
-def setup(plan, dry_run=False, refresh=False):
+def setup(plan, dry_run=False, refresh=False, *, resume=False):
     workspace = Path(plan["workspace"])
-    previous = load_state(workspace, required=False)
-    current = validate(plan, previous)
+    previous = load_state(workspace, required=resume)
+    current = validate(plan, previous, resume=resume)
     describe(plan)
-    # Validate the entire compilation database before mounting or writing state.
-    run(editor_command(plan, dry_run=True))
+    if not resume:
+        # Validate the entire database before mounting or writing state.
+        run(editor_command(plan, dry_run=True))
     if refresh and not current:
         raise SetupError("workspace is not mounted; use mount first")
     if dry_run:
         print("Dry run: no mount, directories, database, or state were changed.")
         return
     with setup_lock(plan):
-        previous = load_state(workspace, required=False)
-        current = validate(plan, previous)
+        previous = load_state(workspace, required=resume)
+        current = validate(plan, previous, resume=resume)
         workspace.mkdir(parents=True, exist_ok=True)
         Path(plan["merged"]).mkdir(exist_ok=True)
         Path(plan["workdir"]).mkdir(parents=True, exist_ok=True)
@@ -396,13 +406,14 @@ def setup(plan, dry_run=False, refresh=False):
                     raise SetupError(
                         "fuse-overlayfs returned without the expected mount"
                     )
-            run(editor_command(plan, dry_run=False))
-            if plan.get("clangd_config"):
-                atomic_write(
-                    Path(plan["merged"]) / ".clangd",
-                    Path(plan["clangd_config"]).read_bytes(),
-                    workspace / "backups",
-                )
+            if not resume:
+                run(editor_command(plan, dry_run=False))
+                if plan.get("clangd_config"):
+                    atomic_write(
+                        Path(plan["merged"]) / ".clangd",
+                        Path(plan["clangd_config"]).read_bytes(),
+                        workspace / "backups",
+                    )
         except BaseException:
             if not current and is_ours(mount_at(Path(plan["merged"])), plan):
                 print(
@@ -417,9 +428,14 @@ def setup(plan, dry_run=False, refresh=False):
                     )
             raise
     print("\nReady: nvim " + shlex.quote(plan["merged"]))
-    print(
-        "The output database is company src/compile_commands.json; backups are in workspace/backups."
-    )
+    if resume:
+        print(
+            "Reused company src/compile_commands.json; database and .clangd left unchanged."
+        )
+    else:
+        print(
+            "The output database is company src/compile_commands.json; backups are in workspace/backups."
+        )
     print(
         "Edit through merged/, do not build there, and unmount before changing backing trees."
     )
@@ -507,13 +523,14 @@ def main(argv=None):
     )
     mount.add_argument("--dry-run", action="store_true")
     for name, help_text in (
+        ("resume", "restore a saved mount without regenerating the database or .clangd"),
         ("refresh", "regenerate the database for an existing mount"),
         ("unmount", "unmount without deleting edits or state"),
         ("status", "show recorded layers and current mount identity"),
     ):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("workspace")
-        if name == "refresh":
+        if name in ("resume", "refresh"):
             command.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     try:
@@ -521,7 +538,9 @@ def main(argv=None):
             setup(make_plan(args), args.dry_run)
         else:
             plan = load_state(absolute(args.workspace))
-            if args.command == "refresh":
+            if args.command == "resume":
+                setup(plan, args.dry_run, resume=True)
+            elif args.command == "refresh":
                 setup(plan, args.dry_run, refresh=True)
             elif args.command == "unmount":
                 with setup_lock(plan):

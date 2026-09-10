@@ -1,3 +1,39 @@
+{{- /* Resolve proxies when chezmoi renders this file, not on each SSH connection.
+     Priority: ALL_PROXY > SOCKS_PROXY/SOCK_PROXY > HTTP_PROXY (either case).
+     Bare SOCK[S]_PROXY endpoints mean SOCKS5; other bare endpoints mean HTTP. */ -}}
+{{- $proxyProtocol := "connect" -}}
+{{- $proxyAddress := "" -}}
+{{- if .githubUseProxy -}}
+{{- $proxy := "" -}}
+{{- $defaultScheme := "http" -}}
+{{- range $name := list "ALL_PROXY" "all_proxy" "SOCKS_PROXY" "socks_proxy" "SOCK_PROXY" "sock_proxy" "HTTP_PROXY" "http_proxy" -}}
+  {{- $value := env $name | trim -}}
+  {{- if and (eq $proxy "") (ne $value "") -}}
+    {{- $proxy = $value -}}
+    {{- if contains "sock" (lower $name) -}}{{- $defaultScheme = "socks5" -}}{{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if eq $proxy "" -}}{{- $proxy = "http://oversea-squid4.sgp.txyun:11080" -}}{{- end -}}
+{{- if not (contains "://" $proxy) -}}{{- $proxy = printf "%s://%s" $defaultScheme $proxy -}}{{- end -}}
+{{- $proxyURL := urlParse $proxy -}}
+{{- $scheme := lower $proxyURL.scheme -}}
+{{- if has $scheme (list "sock" "socks" "socks5" "socks5h") -}}
+  {{- $proxyProtocol = "5" -}}
+{{- else if eq $scheme "socks4" -}}
+  {{- $proxyProtocol = "4" -}}
+{{- else if ne $scheme "http" -}}
+  {{- fail "SSH proxy must use http://, sock[s]://, socks4://, or socks5[h]://; nc does not support HTTPS proxies" -}}
+{{- end -}}
+{{- if or (ne $proxyURL.userinfo "") (ne $proxyURL.query "") (ne $proxyURL.fragment "") (not (has $proxyURL.path (list "" "/"))) -}}
+  {{- fail "SSH proxy must be a host:port URL without credentials, query, fragment, or path" -}}
+{{- end -}}
+{{- $proxyAddress = $proxyURL.host -}}
+{{- if not (regexMatch `^([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\]):[0-9]{1,5}$` $proxyAddress) -}}
+  {{- fail "SSH proxy requires a valid hostname or bracketed IPv6 address and an explicit port" -}}
+{{- end -}}
+{{- $proxyPort := regexFind `[0-9]+$` $proxyAddress | atoi -}}
+{{- if or (lt $proxyPort 1) (gt $proxyPort 65535) -}}{{- fail "SSH proxy port must be between 1 and 65535" -}}{{- end -}}
+{{- end -}}
 {{ if eq .chezmoi.os "darwin" -}}
 # Added by OrbStack: 'orb' SSH host for Linux machines
 # This only works if it's at the top of ssh_config (before any Host blocks).
@@ -94,6 +130,10 @@ Host win-server
 Host github.com
   HostName ssh.github.com
   Port 443
+  User git
+{{- if .githubUseProxy }}
+  ProxyCommand nc -X {{ $proxyProtocol }} -x "{{ $proxyAddress }}" %h %p
+{{- end }}
   AddKeysToAgent yes
   IdentitiesOnly yes
   IdentityFile ~/.ssh/id_ed25519_git

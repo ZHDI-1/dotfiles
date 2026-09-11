@@ -139,6 +139,17 @@ Host github.com
   IdentityFile ~/.ssh/id_ed25519_git
   IdentityFile ~/.ssh/id_ed25519
 
+Host gitlab.com
+  HostName ssh.gitlab.com
+  Port 443
+  User git
+{{- if .githubUseProxy }}
+  ProxyCommand nc -X {{ $proxyProtocol }} -x "{{ $proxyAddress }}" %h %p
+{{- end }}
+  AddKeysToAgent yes
+  IdentitiesOnly yes
+  IdentityFile ~/.ssh/id_ed25519_git
+  IdentityFile ~/.ssh/id_ed25519
 
 {{ if eq .chezmoi.os "darwin" -}}
 Host *

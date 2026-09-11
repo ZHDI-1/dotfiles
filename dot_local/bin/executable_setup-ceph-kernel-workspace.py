@@ -5,7 +5,8 @@ No builds, source substitutions, or Neovim-specific workspace detection happen
 here. Database transformations are delegated to compile-commands-edit.py.
 All writes THROUGH merged/ (including non-Ceph edits) go to company src.
 Do not change either backing tree while mounted. This does not make the
-original Linux path read-only to other processes.
+original Linux path read-only to other processes. Uses kernel OverlayFS;
+only mount/umount are elevated with sudo, never database or state writes.
 """
 
 import argparse
@@ -24,6 +25,8 @@ import tempfile
 from datetime import datetime, timezone
 
 STATE_NAME = ".ceph-kernel-overlay.json"
+STATE_VERSION = 2
+BACKEND = "kernel-overlayfs"
 EDITOR = Path(__file__).resolve().with_name("compile-commands-edit.py")
 IDENTITY_KEYS = ("kernel", "client", "upper", "workspace", "merged", "workdir")
 
@@ -79,8 +82,10 @@ def mount_records():
                     "boot_id": boot_id,
                     "namespace": namespace,
                     "target": unescape(left[4]),
+                    "mount_options": left[5],
                     "type": right[0],
                     "source": unescape(right[1]),
+                    "super_options": unescape(right[2]),
                 }
             )
     return records
@@ -92,14 +97,56 @@ def mount_at(path, records=None):
     return next((r for r in reversed(records) if r["target"] == str(path)), None)
 
 
-def is_overlay(record):
-    return bool(record and record["type"] in ("fuse.fuse-overlayfs", "fuse-overlayfs"))
+def require_native(plan):
+    if plan.get("version") == 1:
+        raise SetupError(
+            "legacy FUSE state/ownership found; left untouched. Unmount with the old "
+            "script and review the upper's whiteouts/xattrs before a separate manual "
+            "migration to a new workspace and fresh native workdir"
+        )
+    if plan.get("version") != STATE_VERSION or plan.get("backend") != BACKEND:
+        raise SetupError("unsupported overlay backend/state")
+
+
+def is_overlay(record, plan):
+    if not record or record["type"] != "overlay" or record.get("root") != "/":
+        return False
+    options = dict(
+        item.split("=", 1)
+        for item in record.get("super_options", "").split(",")
+        if "=" in item
+    )
+    return record["target"] == plan["merged"] and all(
+        options.get(option) == plan[key]
+        for option, key in (
+            ("lowerdir", "kernel"), ("upperdir", "upper"), ("workdir", "workdir")
+        )
+    )
 
 
 def is_ours(record, plan):
-    # fuse-overlayfs 1.16 ignores fsname=. Use the actual mount ID/device,
-    # boot and namespace, not a guessed name or just the filesystem type.
-    return is_overlay(record) and record == plan.get("mounted")
+    # Filesystem type/layers alone are not ownership: also retain the actual
+    # mount ID/device, boot and namespace to reject replacement mounts.
+    return (
+        plan.get("version") == STATE_VERSION
+        and plan.get("backend") == BACKEND
+        and is_overlay(record, plan)
+        and record == plan.get("mounted")
+    )
+
+
+def require_writable(record):
+    # OverlayFS may return mount success but fall back to a read-only superblock
+    # when its workdir cannot be created. The per-mount flags can still say rw.
+    if any(
+        "rw" not in record.get(key, "").split(",")
+        for key in ("mount_options", "super_options")
+    ):
+        raise SetupError(
+            "native OverlayFS mounted read-only; check kernel diagnostics and "
+            "upper/workdir filesystem compatibility (including virtiofs permissions). "
+            "Use a supported local filesystem for the company upper/workdir"
+        )
 
 
 def owner_path(plan):
@@ -116,7 +163,7 @@ def load_owner(plan):
         owner = json.load(handle)
     if (
         not isinstance(owner, dict)
-        or owner.get("version") != 1
+        or owner.get("version") not in (1, STATE_VERSION)
         or owner.get("upper") != plan["upper"]
         or not isinstance(owner.get("merged"), str)
         or not Path(owner["merged"]).is_absolute()
@@ -145,7 +192,7 @@ def load_state(workspace, required=True):
         return None
     with path.open(encoding="utf-8") as handle:
         plan = json.load(handle)
-    if not isinstance(plan, dict) or plan.get("version") != 1:
+    if not isinstance(plan, dict) or plan.get("version") not in (1, STATE_VERSION):
         raise SetupError(f"unsupported setup state: {path}")
     for key in IDENTITY_KEYS + ("database",):
         if not isinstance(plan.get(key), str) or not Path(plan[key]).is_absolute():
@@ -194,6 +241,27 @@ def run(command, timeout=120):
         )
 
 
+def privileged_command(command):
+    if os.geteuid() == 0:
+        return command
+    if not shutil.which("sudo"):
+        raise SetupError("sudo is required for native mount/umount operations")
+    # Never block on an invisible password prompt (including failure cleanup).
+    # Authenticate with sudo -v beforehand if the machine requires a password.
+    return ["sudo", "-n", "--", *command]
+
+
+def run_privileged(command):
+    try:
+        run(privileged_command(command), timeout=30)
+    except SetupError as exc:
+        raise SetupError(
+            f"{exc}; native OverlayFS needs mount privileges and a compatible "
+            "upper/workdir filesystem. If sudo authorization expired, run sudo -v "
+            "and retry as your normal user (do not sudo the whole script)"
+        ) from exc
+
+
 def editor_command(plan, dry_run):
     require_file(EDITOR)
     command = [
@@ -219,6 +287,7 @@ def editor_command(plan, dry_run):
 
 
 def describe(plan):
+    print(f"Backend:                              {plan.get('backend', 'legacy FUSE')}")
     print(f"Linux lower (unchanged through mount): {plan['kernel']}")
     print(f"Company upper (ALL overlay writes):   {plan['upper']}")
     print(f"Merged editor path:                   {plan['merged']}")
@@ -231,6 +300,9 @@ def describe(plan):
 
 
 def validate(plan, previous=None, *, resume=False):
+    require_native(plan)
+    if previous:
+        require_native(previous)
     kernel, client, upper, workspace, merged, workdir = (
         Path(plan[k]) for k in IDENTITY_KEYS
     )
@@ -272,7 +344,13 @@ def validate(plan, previous=None, *, resume=False):
     current = mount_at(merged, records)
     if current and (not previous or not is_ours(current, previous)):
         raise SetupError(f"refusing to use an unrecognized existing mount at {merged}")
+    if current:
+        require_writable(current)
     owner = load_owner(plan)
+    if owner:
+        # Even an unmounted legacy upper can contain incompatible FUSE metadata.
+        # A new workspace must not silently bypass the migration boundary.
+        require_native(owner)
     if (
         owner
         and owner["merged"] != str(merged)
@@ -323,8 +401,10 @@ def validate(plan, previous=None, *, resume=False):
             raise SetupError(
                 f"input and company output are the same file: {input_path}"
             )
-    if not shutil.which("fuse-overlayfs") or not shutil.which("fusermount3"):
-        raise SetupError("fuse-overlayfs and fusermount3 must be installed")
+    if not shutil.which("mount") or not shutil.which("umount"):
+        raise SetupError("mount and umount (util-linux) must be installed")
+    if os.geteuid() != 0 and not shutil.which("sudo"):
+        raise SetupError("sudo is required for native mount/umount operations")
     return current
 
 
@@ -348,15 +428,16 @@ def setup_lock(plan):
 
 
 def unmount(plan):
+    require_native(plan)
     record = mount_at(Path(plan["merged"]))
     if not record:
         print("Already unmounted; company edits and generated files are retained.")
         return
     if not is_ours(record, plan):
         raise SetupError("refusing to unmount a filesystem not owned by this setup")
-    run(["fusermount3", "-u", plan["merged"]], timeout=30)
+    run_privileged(["umount", "--", plan["merged"]])
     if mount_at(Path(plan["merged"])):
-        raise SetupError("mount is still present after fusermount3")
+        raise SetupError("mount is still present after umount")
     print(
         "Unmounted. Company edits and generated files are retained; nothing was deleted."
     )
@@ -390,22 +471,26 @@ def setup(plan, dry_run=False, refresh=False, *, resume=False):
             if not current:
                 options = (
                     f"lowerdir={plan['kernel']},upperdir={plan['upper']},"
-                    f"workdir={plan['workdir']}"
+                    f"workdir={plan['workdir']},nosuid,nodev"
                 )
                 try:
-                    run(["fuse-overlayfs", "-o", options, plan["merged"]], timeout=30)
+                    run_privileged(
+                        ["mount", "-t", "overlay", "overlay", "-o", options,
+                         "--", plan["merged"]]
+                    )
                 finally:
                     # We verified an empty, unmounted target before this call.
                     # Capture even a mount made by a command that subsequently
                     # errors/times out, so the exception path can clean it up.
                     record = mount_at(Path(plan["merged"]))
-                    if is_overlay(record):
+                    if is_overlay(record, plan):
                         plan["mounted"] = record
                         persist(plan)
                 if not is_ours(mount_at(Path(plan["merged"])), plan):
                     raise SetupError(
-                        "fuse-overlayfs returned without the expected mount"
+                        "mount returned without the expected native overlay layers"
                     )
+                require_writable(plan["mounted"])
             if not resume:
                 run(editor_command(plan, dry_run=False))
                 if plan.get("clangd_config"):
@@ -452,11 +537,12 @@ def make_plan(args):
     workdir = (
         Path(os.path.abspath(os.path.expanduser(args.workdir)))
         if args.workdir
-        else client / ".ceph-kernel-overlay-work"
+        else client / ".ceph-kernel-overlay-native-work"
     )
     workdir = workdir.parent.resolve() / workdir.name
     return {
-        "version": 1,
+        "version": STATE_VERSION,
+        "backend": BACKEND,
         "kernel": str(kernel),
         "client": str(client),
         "upper": str(client / "src"),
@@ -543,10 +629,12 @@ def main(argv=None):
             elif args.command == "refresh":
                 setup(plan, args.dry_run, refresh=True)
             elif args.command == "unmount":
+                require_native(plan)  # Refuse legacy state before even creating a lock.
                 with setup_lock(plan):
                     unmount(plan)
             else:
                 describe(plan)
+                require_native(plan)
                 record = mount_at(Path(plan["merged"]))
                 print(
                     "Status: "

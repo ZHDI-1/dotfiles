@@ -1,26 +1,35 @@
 #!/usr/bin/env python3
-"""Focused integration tests for chezmoi-edit-git.py using only disposable repos."""
+"""Linux/macOS process tests and integration tests using only disposable repos."""
 
 from __future__ import annotations
 
+import ctypes
 import errno
+import importlib.util
 import json
 import os
 import pty
 import select
+import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import tomllib
 
 HERE = Path(__file__).resolve().parent
 HELPER = HERE / "chezmoi-edit-git.py"
 CONFIG_TEMPLATE = HERE.parent / ".chezmoi.toml.tmpl"
-CHEZMOI = Path("/usr/bin/chezmoi")
+CHEZMOI = shutil.which("chezmoi")
+SPEC = importlib.util.spec_from_file_location("chezmoi_edit_git", HELPER)
+assert SPEC is not None and SPEC.loader is not None
+helper = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(helper)
 
 
 def isolated_env(home: Path, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -154,10 +163,147 @@ class PtyChild:
         return self.output.decode(errors="replace").replace("\r\n", "\n")
 
 
+class ProcessInspectionTests(unittest.TestCase):
+    @staticmethod
+    def procargs(argv: list[bytes]) -> bytes:
+        argc = len(argv).to_bytes(ctypes.sizeof(ctypes.c_int), sys.byteorder, signed=True)
+        return argc + b"/opt/homebrew/bin/chezmoi\0\0\0" + b"\0".join(argv) + b"\0"
+
+    def test_darwin_procargs_preserves_boundaries_and_ignores_environment(self) -> None:
+        argv = [b"chezmoi", b"edit", b"", b"name with space", b"a'\"b", b"line\nbreak", b"\xff", b""]
+        data = self.procargs(argv) + b"HOME=/Users/test\0--force\0"
+        decoded = helper.parse_darwin_procargs(data)
+        self.assertEqual(decoded, [os.fsdecode(arg) for arg in argv])
+        self.assertEqual(helper.edit_targets(decoded), decoded[2:])
+        self.assertFalse(helper._long_flag_is_true(decoded, "", "--force"))
+
+    def test_darwin_procargs_rejects_malformed_or_truncated_data(self) -> None:
+        for data in (
+            b"", b"\0", self.procargs([]),
+            (-1).to_bytes(ctypes.sizeof(ctypes.c_int), sys.byteorder, signed=True),
+            self.procargs([b"chezmoi", b"edit"])[:-1],
+            (2).to_bytes(ctypes.sizeof(ctypes.c_int), sys.byteorder) + b"unterminated",
+        ):
+            with self.subTest(data=data):
+                self.assertIsNone(helper.parse_darwin_procargs(data))
+
+    def test_darwin_command_argv_uses_native_sysctl(self) -> None:
+        argv = [b"chezmoi", b"edit", b"/Users/test/.name with space"]
+        responses = [
+            (262144).to_bytes(ctypes.sizeof(ctypes.c_int), sys.byteorder),
+            self.procargs(argv) + b"HOME=/Users/test\0",
+        ]
+        library = mock.Mock()
+
+        def sysctl(names, count, buffer, size_pointer, new_value, new_size):
+            mib = tuple(names)
+            self.assertEqual(count, len(mib))
+            self.assertIsNone(new_value)
+            self.assertEqual(new_size, 0)
+            self.assertEqual(mib, (1, 8) if len(responses) == 2 else (1, 49, 123))
+            data = responses.pop(0)
+            capacity = ctypes.cast(size_pointer, ctypes.POINTER(ctypes.c_size_t))
+            self.assertGreaterEqual(capacity.contents.value, len(data))
+            ctypes.memmove(buffer, data, len(data))
+            capacity.contents.value = len(data)
+            return 0
+
+        library.sysctl.side_effect = sysctl
+        with mock.patch.object(helper.sys, "platform", "darwin"), \
+             mock.patch.object(helper.os, "getppid", return_value=123), \
+             mock.patch.object(helper.ctypes, "CDLL", return_value=library):
+            self.assertEqual(helper.command_argv({}), [os.fsdecode(arg) for arg in argv])
+        self.assertEqual(library.sysctl.call_count, 2)
+
+    def test_darwin_argument_lookup_fails_closed(self) -> None:
+        argmax = (262144).to_bytes(ctypes.sizeof(ctypes.c_int), sys.byteorder)
+        for responses in ([None], [b""], [b"\0" * 4], [argmax, None], [argmax, b"bad"]):
+            with self.subTest(responses=responses), \
+                 mock.patch.object(helper.sys, "platform", "darwin"), \
+                 mock.patch.object(helper, "darwin_sysctl", side_effect=responses):
+                self.assertIsNone(helper.command_argv({"CHEZMOI_ARGS": "chezmoi edit 'a b'"}))
+
+    def test_darwin_process_identity_includes_microseconds(self) -> None:
+        library = mock.Mock()
+
+        def proc_pidinfo(pid, flavor, argument, buffer, size):
+            self.assertEqual((pid, flavor, argument, size), (123, 3, 0, 136))
+            info = ctypes.cast(buffer, ctypes.POINTER(helper.DarwinProcBsdInfo)).contents
+            info.pbi_pid = pid
+            info.pbi_start_tvsec = 1700000000
+            info.pbi_start_tvusec = 42
+            return size
+
+        library.proc_pidinfo.side_effect = proc_pidinfo
+        with mock.patch.object(helper.sys, "platform", "darwin"), \
+             mock.patch.object(helper.ctypes, "CDLL", return_value=library), \
+             mock.patch.object(helper.os, "kill"):
+            self.assertEqual(helper.process_start_time(123), "1700000000.000042")
+            self.assertTrue(helper.process_is_same(123, "1700000000.000042"))
+            self.assertFalse(helper.process_is_same(123, "1700000000.000043"))
+            library.proc_pidinfo.side_effect = None
+            for result in (0, -1, 135, 136):
+                # Even a full-sized response with the wrong PID is rejected.
+                library.proc_pidinfo.return_value = result
+                self.assertIsNone(helper.process_start_time(123))
+
+    def test_darwin_native_api_failures_are_unavailable(self) -> None:
+        library = mock.Mock()
+        library.sysctl.return_value = -1
+        with mock.patch.object(helper.sys, "platform", "darwin"), \
+             mock.patch.object(helper.ctypes, "CDLL", return_value=library):
+            self.assertIsNone(helper.command_argv({}))
+        for error in (OSError("not available"), AttributeError("missing symbol")):
+            with self.subTest(error=error), \
+                 mock.patch.object(helper.sys, "platform", "darwin"), \
+                 mock.patch.object(helper.ctypes, "CDLL", side_effect=error):
+                self.assertIsNone(helper.command_argv({}))
+                self.assertIsNone(helper.process_start_time(123))
+
+    @unittest.skipUnless(sys.platform in {"linux", "darwin"}, "requires Linux or macOS")
+    def test_native_parent_argv_preserves_exact_arguments(self) -> None:
+        probe = (
+            "import json, runpy, sys; "
+            "helper = runpy.run_path(sys.argv[1]); "
+            "print(json.dumps(helper['command_argv']({})))"
+        )
+        parent = (
+            "import subprocess, sys; "
+            f"subprocess.run([sys.executable, '-c', {probe!r}, sys.argv[1]], check=True)"
+        )
+        command = [
+            sys.executable, "-c", parent, os.fspath(HELPER), "edit",
+            "a b", "a'\"b", "line\nbreak", "", "--force=false", "",
+        ]
+        self.assertEqual(json.loads(run(command).stdout), command)
+
+    @unittest.skipUnless(sys.platform in {"linux", "darwin"}, "requires Linux or macOS")
+    def test_native_process_identity_is_available_and_stable(self) -> None:
+        pid = os.getpid()
+        start = helper.process_start_time(pid)
+        self.assertIsNotNone(start)
+        self.assertEqual(helper.process_start_time(pid), start)
+        self.assertTrue(helper.process_is_same(pid, start))
+        self.assertFalse(helper.process_is_same(pid, "different start time"))
+
+    def test_missing_exact_argv_skips_hooks_instead_of_guessing(self) -> None:
+        for mode in ("pre", "post"):
+            with self.subTest(mode=mode), \
+                 mock.patch.object(helper.sys, "argv", [os.fspath(HELPER), mode]), \
+                 mock.patch.object(helper, "command_argv", return_value=None), \
+                 mock.patch.object(helper, "invocation_is_interactive", return_value=True), \
+                 mock.patch.object(helper, "pre_hook") as pre, \
+                 mock.patch.object(helper, "post_hook") as post, \
+                 mock.patch.object(helper, "eprint"):
+                self.assertEqual(helper.main(), 0)
+                pre.assert_not_called()
+                post.assert_not_called()
+
+
 class Sandbox:
     def __init__(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="chezmoi-edit-git-test-")
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.repo = self.root / "source"
         self.home = self.root / "home"
         self.remote = self.root / "origin.git"
@@ -313,11 +459,8 @@ Path(sys.argv[1]).write_text(os.environ["EDITED_COMMIT_MESSAGE"] + "\\n")
 
 class ChezmoiEditGitTests(unittest.TestCase):
     def setUp(self) -> None:
-        if not CHEZMOI.is_file():
-            self.skipTest("/usr/bin/chezmoi is required")
-        version = run([os.fspath(CHEZMOI), "--version"]).stdout.decode()
-        if "v2.72.0" not in version or "f81cb321" not in version:
-            self.skipTest(f"tests target installed chezmoi v2.72.0 f81cb321, got {version.strip()}")
+        if CHEZMOI is None:
+            self.skipTest("chezmoi is required on PATH")
         self.box = Sandbox()
 
     def tearDown(self) -> None:
@@ -653,7 +796,8 @@ class ChezmoiEditGitTests(unittest.TestCase):
             ],
             cwd=self.box.home,
             env=self.box.env,
-            input=CONFIG_TEMPLATE.read_bytes(),
+            # The [data] prompts are init-only; this test renders the hook section.
+            input=CONFIG_TEMPLATE.read_bytes().split(b"\n[data]", 1)[0],
         ).stdout
         config = tomllib.loads(rendered.decode())
         self.assertEqual(

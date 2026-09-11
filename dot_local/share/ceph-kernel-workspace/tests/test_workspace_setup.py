@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Unit tests; optional isolated real mounts with RUN_FUSE_TESTS=1.
+"""Unit tests; optional isolated real mounts with RUN_OVERLAY_TESTS=1.
 
-WORKSPACE_TOOLS_BIN selects the scripts under test. FUSE_TEST_ROOT can place
-throwaway fixtures on a particular filesystem, e.g. a virtiofs share.
+WORKSPACE_TOOLS_BIN selects the scripts under test. OVERLAY_TEST_ROOT can place
+throwaway fixtures on a particular filesystem. Native mounts need sudo access.
 """
 
 import contextlib
@@ -63,19 +63,44 @@ def fixture(base):
     ]
     write(kernel / "compile_commands.json", json.dumps(database))
     return {
-        "version": 1,
+        "version": setup.STATE_VERSION,
+        "backend": setup.BACKEND,
         "kernel": str(kernel),
         "client": str(client),
         "upper": str(client / "src"),
         "workspace": str(workspace),
         "merged": str(workspace / "merged"),
-        "workdir": str(client / ".ceph-kernel-overlay-work"),
+        "workdir": str(client / ".ceph-kernel-overlay-native-work"),
         "database": str(kernel / "compile_commands.json"),
         "source_prefix": None,
         "maps": [],
         "gcc_include": None,
         "clangd_config": None,
     }
+
+
+def native_record(plan):
+    return {
+        "target": plan["merged"],
+        "type": "overlay",
+        "source": "overlay",
+        "mount_options": "rw,nosuid,nodev",
+        "id": "91",
+        "device": "0:45",
+        "root": "/",
+        "boot_id": "boot-a",
+        "namespace": "mnt:[100]",
+        "super_options": (
+            f"rw,lowerdir={plan['kernel']},upperdir={plan['upper']},"
+            f"workdir={plan['workdir']}"
+        ),
+    }
+
+
+def legacy_plan(plan):
+    old = dict(plan, version=1)
+    old.pop("backend", None)
+    return old
 
 
 class SetupTests(unittest.TestCase):
@@ -156,15 +181,7 @@ class SetupTests(unittest.TestCase):
             self.validate()
 
     def test_mount_identity(self):
-        own = {
-            "target": self.plan["merged"],
-            "type": "fuse.fuse-overlayfs",
-            "source": "fuse-overlayfs",
-            "id": "91",
-            "device": "0:45",
-            "boot_id": "boot-a",
-            "namespace": "mnt:[100]",
-        }
+        own = native_record(self.plan)
         self.plan["mounted"] = own
         self.assertEqual(self.validate(self.plan, [own]), own)
         with self.assertRaisesRegex(setup.SetupError, "unrecognized"):
@@ -174,6 +191,8 @@ class SetupTests(unittest.TestCase):
             ("id", "92"),
             ("boot_id", "boot-b"),
             ("namespace", "mnt:[200]"),
+            ("type", "fuse.fuse-overlayfs"),
+            ("super_options", "rw,lowerdir=/foreign,upperdir=/other,workdir=/work"),
         ):
             with (
                 self.subTest(field=field),
@@ -182,11 +201,7 @@ class SetupTests(unittest.TestCase):
                 self.validate(self.plan, [dict(own, **{field: value})])
 
     def test_same_upper_cannot_be_mounted_twice(self):
-        other = {
-            "target": "/elsewhere",
-            "type": "fuse.fuse-overlayfs",
-            "source": "fuse-overlayfs",
-        }
+        other = dict(native_record(self.plan), target="/elsewhere")
         owner = dict(self.plan, merged="/elsewhere")
         write(setup.owner_path(self.plan), json.dumps(owner))
         with self.assertRaisesRegex(setup.SetupError, "already mounted"):
@@ -200,6 +215,100 @@ class SetupTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(setup.SetupError, "nested mount"):
             self.validate(self.plan, [nested])
+
+    def test_native_plan_uses_new_state_and_workdir(self):
+        with mock.patch.object(setup, "setup") as mount:
+            self.assertEqual(
+                setup.main([
+                    "mount", self.plan["kernel"], self.plan["client"],
+                    self.plan["workspace"], "--dry-run",
+                ]),
+                0,
+            )
+        plan = mount.call_args.args[0]
+        self.assertEqual(plan["version"], setup.STATE_VERSION)
+        self.assertEqual(plan["backend"], "kernel-overlayfs")
+        self.assertEqual(plan["workdir"], self.plan["workdir"])
+        self.assertTrue(mount.call_args.args[1])
+
+    def test_privilege_boundary(self):
+        command = ["mount", "-t", "overlay"]
+        with mock.patch.object(setup.os, "geteuid", return_value=0):
+            self.assertEqual(setup.privileged_command(command), command)
+        with (
+            mock.patch.object(setup.os, "geteuid", return_value=501),
+            mock.patch.object(setup.shutil, "which", return_value="/usr/bin/sudo"),
+        ):
+            self.assertEqual(
+                setup.privileged_command(command), ["sudo", "-n", "--", *command]
+            )
+        with (
+            mock.patch.object(setup.os, "geteuid", return_value=501),
+            mock.patch.object(setup.shutil, "which", return_value=None),
+            self.assertRaisesRegex(setup.SetupError, "sudo is required"),
+        ):
+            setup.privileged_command(command)
+
+    def test_fuse_tools_no_longer_required(self):
+        tools = {"mount": "/bin/mount", "umount": "/bin/umount", "sudo": "/bin/sudo"}
+        with (
+            mock.patch.object(setup, "mount_records", return_value=[]),
+            mock.patch.object(setup.shutil, "which", side_effect=tools.get),
+        ):
+            self.assertIsNone(setup.validate(self.plan))
+
+    def test_legacy_workspace_commands_leave_state_and_mount_untouched(self):
+        old = legacy_plan(self.plan)
+        old["mounted"] = dict(native_record(old), type="fuse.fuse-overlayfs")
+        workspace = Path(old["workspace"])
+        workspace.mkdir()
+        setup.persist(old)
+        state = setup.state_path(workspace).read_bytes()
+        owner = setup.owner_path(old).read_bytes()
+        for command in ("mount", "resume", "refresh", "unmount"):
+            with (
+                self.subTest(command=command),
+                mock.patch.object(setup, "mount_records", return_value=[old["mounted"]]),
+                mock.patch.object(setup, "run") as run,
+                contextlib.redirect_stdout(self.output),
+                contextlib.redirect_stderr(self.output),
+            ):
+                args = [command, str(workspace)]
+                if command == "mount":
+                    args = [command, old["kernel"], old["client"], str(workspace)]
+                self.assertEqual(setup.main(args), 1)
+                run.assert_not_called()
+                self.assertIn("legacy FUSE", self.output.getvalue())
+                self.assertEqual(setup.state_path(workspace).read_bytes(), state)
+                self.assertEqual(setup.owner_path(old).read_bytes(), owner)
+                self.assertFalse(Path(old["workdir"]).exists())
+                self.assertFalse(
+                    (Path(old["client"]) / ".ceph-kernel-overlay.lock").exists()
+                )
+
+    def test_legacy_upper_owner_refused_even_when_unmounted(self):
+        owner = legacy_plan(dict(self.plan, merged="/old/workspace/merged"))
+        write(setup.owner_path(self.plan), json.dumps(owner))
+        with self.assertRaisesRegex(setup.SetupError, "legacy FUSE"):
+            self.validate()
+
+    def test_unknown_backend_refused(self):
+        self.plan["backend"] = "another-overlay"
+        with self.assertRaisesRegex(setup.SetupError, "unsupported overlay"):
+            self.validate()
+
+    def test_fuse_mount_never_adopted_or_unmounted(self):
+        record = dict(native_record(self.plan), type="fuse.fuse-overlayfs")
+        self.plan["mounted"] = record
+        with self.assertRaisesRegex(setup.SetupError, "unrecognized"):
+            self.validate(self.plan, [record])
+        with (
+            mock.patch.object(setup, "mount_at", return_value=record),
+            mock.patch.object(setup, "run") as run,
+            self.assertRaisesRegex(setup.SetupError, "not owned"),
+        ):
+            setup.unmount(self.plan)
+        run.assert_not_called()
 
     def test_dry_run_does_not_create_directories(self):
         with (
@@ -243,11 +352,7 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(Path(self.plan["workdir"]).exists())
 
     def test_generation_failure_unmounts_only_new_mount(self):
-        record = {
-            "target": self.plan["merged"],
-            "source": "fuse-overlayfs",
-            "type": "fuse.fuse-overlayfs",
-        }
+        record = native_record(self.plan)
         for current in (None, record):
             with (
                 self.subTest(existing=bool(current)),
@@ -268,6 +373,34 @@ class SetupTests(unittest.TestCase):
                         setup.setup(self.plan)
                 self.assertEqual(unmount.call_count, 0 if current else 1)
                 self.assertTrue(setup.state_path(Path(self.plan["workspace"])).exists())
+
+    def test_unexpected_overlay_layers_never_adopted_on_mount_failure(self):
+        record = dict(native_record(self.plan), super_options="rw,lowerdir=/foreign")
+        with (
+            mock.patch.object(setup, "validate", return_value=None),
+            mock.patch.object(setup, "mount_at", return_value=record),
+            mock.patch.object(setup, "EDITOR", Path(self.plan["database"])),
+            mock.patch.object(setup, "run"),
+            mock.patch.object(setup, "unmount") as unmount,
+            contextlib.redirect_stdout(self.output),
+            self.assertRaisesRegex(setup.SetupError, "expected native overlay layers"),
+        ):
+            setup.setup(self.plan)
+        unmount.assert_not_called()
+        self.assertNotIn("mounted", setup.load_state(Path(self.plan["workspace"])))
+
+    def test_busy_unmount_fails_without_force_or_lazy_flags(self):
+        record = native_record(self.plan)
+        self.plan["mounted"] = record
+        with (
+            mock.patch.object(setup, "mount_at", return_value=record),
+            mock.patch.object(setup.os, "geteuid", return_value=0),
+            mock.patch.object(setup, "run", side_effect=setup.SetupError("busy")) as run,
+            self.assertRaisesRegex(setup.SetupError, "busy"),
+        ):
+            setup.unmount(self.plan)
+        run.assert_called_once_with(["umount", "--", self.plan["merged"]], timeout=30)
+        self.assertEqual(self.plan["mounted"], record)
 
     def test_foreign_mount_never_unmounted(self):
         record = {"target": self.plan["merged"], "source": "foreign", "type": "tmpfs"}
@@ -318,12 +451,14 @@ class SetupTests(unittest.TestCase):
 
     def test_mountinfo_escape_parsing(self):
         content = (
-            "91 1 0:45 / /tmp/a\\040b rw - fuse.fuse-overlayfs ceph-kernel-test rw\n"
+            "91 1 0:45 / /tmp/a\\040b rw - overlay overlay "
+            "rw,lowerdir=/tmp/l\\040b,upperdir=/tmp/u,workdir=/tmp/w\n"
         )
         with mock.patch("builtins.open", mock.mock_open(read_data=content)):
             record = setup.mount_records()[0]
         self.assertEqual(record["target"], "/tmp/a b")
-        self.assertEqual(record["source"], "ceph-kernel-test")
+        self.assertEqual(record["source"], "overlay")
+        self.assertIn("lowerdir=/tmp/l b", record["super_options"])
 
 
 class ResumeTests(unittest.TestCase):
@@ -346,16 +481,9 @@ class ResumeTests(unittest.TestCase):
         self.plan["gcc_include"] = str(self.base / "gcc/include")
         write(Path(self.plan["gcc_include"]) / "stdarg.h")
         write(Path(self.plan["workdir"]) / "scratch", "retained")
-        self.record = {
-            "target": self.plan["merged"],
-            "source": "fuse-overlayfs",
-            "type": "fuse.fuse-overlayfs",
-            "id": "91",
-            "device": "0:45",
-            "root": "/",
-            "boot_id": "new-boot",
-            "namespace": "mnt:[200]",
-        }
+        self.record = dict(
+            native_record(self.plan), boot_id="new-boot", namespace="mnt:[200]"
+        )
         self.plan["mounted"] = dict(
             self.record, boot_id="old-boot", namespace="mnt:[100]"
         )
@@ -366,6 +494,7 @@ class ResumeTests(unittest.TestCase):
         patches = (
             mock.patch.object(setup, "mount_records", return_value=self.records),
             mock.patch.object(setup.shutil, "which", return_value="/tool"),
+            mock.patch.object(setup.os, "geteuid", return_value=501),
             mock.patch.object(
                 setup, "editor_command", side_effect=AssertionError("editor called")
             ),
@@ -377,9 +506,10 @@ class ResumeTests(unittest.TestCase):
         self.run = result
 
     def execute(self, command, **kwargs):
-        if command[0] == "fuse-overlayfs":
+        self.assertEqual(command[:3], ["sudo", "-n", "--"])
+        if command[3] == "mount":
             self.records.append(self.record)
-        elif command[0] == "fusermount3":
+        elif command[3] == "umount":
             self.records.clear()
         else:
             self.fail(f"unexpected command during resume: {command}")
@@ -401,13 +531,12 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(self.resume(), 0, self.output.getvalue())
         self.run.assert_called_once_with(
             [
-                "fuse-overlayfs",
-                "-o",
+                "sudo", "-n", "--", "mount", "-t", "overlay", "overlay", "-o",
                 (
                     f"lowerdir={self.plan['kernel']},upperdir={self.plan['upper']},"
-                    f"workdir={self.plan['workdir']}"
+                    f"workdir={self.plan['workdir']},nosuid,nodev"
                 ),
-                self.plan["merged"],
+                "--", self.plan["merged"],
             ],
             timeout=30,
         )
@@ -492,10 +621,40 @@ class ResumeTests(unittest.TestCase):
         self.assertIn("mountpoint must be empty", self.output.getvalue())
         self.run.assert_not_called()
 
+    def test_readonly_mount_success_is_cleaned_up_without_generation(self):
+        self.record["super_options"] = self.record["super_options"].replace("rw,", "ro,", 1)
+        self.assertEqual(self.resume(), 1)
+        self.assertIn("native OverlayFS mounted read-only", self.output.getvalue())
+        self.assertEqual(self.records, [])
+        self.assertEqual(self.run.call_count, 2)  # mount, then normal owned cleanup
+        self.assertEqual(self.generated_snapshot(), self.before)
+
+    def test_existing_readonly_mount_refused_without_unmounting(self):
+        self.record["mount_options"] = "ro,nosuid,nodev"
+        self.plan["mounted"] = self.record
+        setup.persist(self.plan)
+        self.records.append(self.record)
+        state = setup.state_path(self.workspace).read_bytes()
+        self.assertEqual(self.resume(), 1)
+        self.assertIn("mounted read-only", self.output.getvalue())
+        self.run.assert_not_called()
+        self.assertEqual(self.records, [self.record])
+        self.assertEqual(setup.state_path(self.workspace).read_bytes(), state)
+        self.assertEqual(self.generated_snapshot(), self.before)
+
+    def test_mount_denied_before_attachment_preserves_files(self):
+        self.run.side_effect = setup.SetupError("permission denied")
+        self.assertEqual(self.resume(), 1)
+        self.assertIn("sudo -v", self.output.getvalue())
+        self.assertEqual(self.records, [])
+        self.assertEqual(self.run.call_count, 1)
+        self.assertEqual(self.generated_snapshot(), self.before)
+        self.assertNotIn("mounted", setup.load_state(self.workspace))
+
     def test_failed_resume_cleans_up_new_mount(self):
         def fail_after_mount(command, **kwargs):
             self.execute(command, **kwargs)
-            if command[0] == "fuse-overlayfs":
+            if command[3] == "mount":
                 raise setup.SetupError("mount failed after attaching")
 
         self.run.side_effect = fail_after_mount
@@ -507,12 +666,12 @@ class ResumeTests(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    os.environ.get("RUN_FUSE_TESTS") == "1",
-    "set RUN_FUSE_TESTS=1 for isolated real FUSE tests",
+    os.environ.get("RUN_OVERLAY_TESTS") == "1",
+    "set RUN_OVERLAY_TESTS=1 for isolated real native OverlayFS tests",
 )
-class RealFuseTests(unittest.TestCase):
+class RealOverlayTests(unittest.TestCase):
     def test_mount_edit_refresh_unmount(self):
-        root = os.environ.get("FUSE_TEST_ROOT")
+        root = os.environ.get("OVERLAY_TEST_ROOT")
         temporary = tempfile.TemporaryDirectory(
             prefix="ceph-overlay-live-test-", dir=root
         )
@@ -540,6 +699,11 @@ class RealFuseTests(unittest.TestCase):
             self.assertFalse(workspace.exists())
             subprocess.run(command, check=True, timeout=120)
             self.assertTrue(os.path.ismount(merged))
+            saved = setup.load_state(workspace)
+            self.assertTrue(setup.is_ours(setup.mount_at(merged), saved))
+            self.assertEqual(setup.mount_at(merged)["type"], "overlay")
+            self.assertEqual((upper / "compile_commands.json").stat().st_uid, os.getuid())
+            self.assertEqual(setup.state_path(workspace).stat().st_uid, os.getuid())
             self.assertEqual((merged / "fs/ceph/inode.c").read_text(), "company\n")
             self.assertEqual((merged / "kernel/core.c").read_text(), "kernel\n")
             write(merged / "fs/ceph/inode.c", "company edited\n")
@@ -553,6 +717,11 @@ class RealFuseTests(unittest.TestCase):
             )
             write(merged / "new-file", "new\n")
             self.assertTrue((upper / "new-file").is_file())
+            self.assertEqual((upper / "kernel/core.c").stat().st_uid, os.getuid())
+            # Native whiteouts must hide a lower file without changing the lower.
+            (merged / "Kconfig").unlink()
+            self.assertFalse((merged / "Kconfig").exists())
+            self.assertEqual((kernel / "Kconfig").read_text(), "kernel\n")
             database = json.loads((merged / "compile_commands.json").read_text())
             self.assertTrue((upper / "compile_commands.json").is_file())
             self.assertTrue(all(e["directory"] == str(merged) for e in database))
@@ -620,12 +789,23 @@ class RealFuseTests(unittest.TestCase):
             if os.path.ismount(merged):
                 try:
                     subprocess.run(
-                        ["fusermount3", "-u", str(merged)], check=False, timeout=30
+                        setup.privileged_command(["umount", "--", str(merged)]),
+                        check=False, timeout=30,
                     )
                 except subprocess.TimeoutExpired:
                     pass
             if not os.path.ismount(merged):
-                temporary.cleanup()
+                # Kernel-private scratch children can be root-owned/mode 000.
+                # Remove ONLY this disposable fixture's workdir, after unmount.
+                try:
+                    subprocess.run(
+                        setup.privileged_command(["rm", "-rf", "--", plan["workdir"]]),
+                        check=True, timeout=30,
+                    )
+                    temporary.cleanup()
+                except BaseException:
+                    temporary._finalizer.detach()
+                    raise
             else:
                 # Never recursively delete through a mount if cleanup fails.
                 temporary._finalizer.detach()

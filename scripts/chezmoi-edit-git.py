@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import fcntl
 import hashlib
 import json
@@ -31,16 +32,74 @@ def eprint(message: str) -> None:
     print(f"chezmoi-edit-git: {message}", file=sys.stderr, flush=True)
 
 
+def darwin_sysctl(mib: Sequence[int], capacity: int) -> bytes | None:
+    """Read a bounded macOS sysctl without invoking a lossy text formatter."""
+    try:
+        sysctl = ctypes.CDLL("/usr/lib/libSystem.B.dylib").sysctl
+    except (OSError, AttributeError):
+        return None
+    sysctl.argtypes = [
+        ctypes.POINTER(ctypes.c_int), ctypes.c_uint, ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t,
+    ]
+    sysctl.restype = ctypes.c_int
+    names = (ctypes.c_int * len(mib))(*mib)
+    buffer = ctypes.create_string_buffer(capacity)
+    size = ctypes.c_size_t(capacity)
+    if sysctl(names, len(mib), buffer, ctypes.byref(size), None, 0) != 0:
+        return None
+    if size.value > capacity:
+        return None
+    return buffer.raw[:size.value]
+
+
+def parse_darwin_procargs(data: bytes) -> list[str] | None:
+    """Decode KERN_PROCARGS2: native argc, executable, padding, argv, environ."""
+    int_size = ctypes.sizeof(ctypes.c_int)
+    if len(data) < int_size:
+        return None
+    argc = int.from_bytes(data[:int_size], sys.byteorder, signed=True)
+    if argc <= 0:
+        return None
+    end = data.find(b"\0", int_size)
+    if end < 0:
+        return None
+    offset = end + 1
+    # Padding precedes argv[0]; later empty arguments must NOT be skipped.
+    while offset < len(data) and data[offset] == 0:
+        offset += 1
+    argv: list[str] = []
+    for _ in range(argc):
+        end = data.find(b"\0", offset)
+        if end < 0:
+            return None
+        argv.append(os.fsdecode(data[offset:end]))
+        offset = end + 1
+    return argv
+
+
 def command_argv(env: Mapping[str, str]) -> list[str] | None:
     """Return the parent chezmoi argv when the platform exposes it losslessly."""
+    if sys.platform == "darwin":
+        # CTL_KERN = 1, KERN_ARGMAX = 8, KERN_PROCARGS2 = 49 (sys/sysctl.h).
+        raw_argmax = darwin_sysctl((1, 8), ctypes.sizeof(ctypes.c_int))
+        if raw_argmax is None or len(raw_argmax) != ctypes.sizeof(ctypes.c_int):
+            return None
+        argmax = int.from_bytes(raw_argmax, sys.byteorder, signed=True)
+        if argmax <= 0:
+            return None
+        data = darwin_sysctl((1, 49, os.getppid()), argmax)
+        return parse_darwin_procargs(data) if data is not None else None
+    if sys.platform != "linux":
+        return None
     proc_cmdline = Path(f"/proc/{os.getppid()}/cmdline")
     try:
         data = proc_cmdline.read_bytes()
     except OSError:
         return None
-    if not data:
+    if not data or not data.endswith(b"\0"):
         return None
-    return [os.fsdecode(arg) for arg in data.rstrip(b"\0").split(b"\0")]
+    return [os.fsdecode(arg) for arg in data[:-1].split(b"\0")]
 
 
 def _long_flag_is_true(argv: Sequence[str] | None, raw: str, flag: str) -> bool:
@@ -213,7 +272,55 @@ def head_and_branch(repo: Path) -> tuple[str, str]:
     return head, branch
 
 
+class DarwinProcBsdInfo(ctypes.Structure):
+    """proc_bsdinfo from macOS sys/proc_info.h (MAXCOMLEN = 16)."""
+
+    _fields_ = [
+        ("pbi_flags", ctypes.c_uint32),
+        ("pbi_status", ctypes.c_uint32),
+        ("pbi_xstatus", ctypes.c_uint32),
+        ("pbi_pid", ctypes.c_uint32),
+        ("pbi_ppid", ctypes.c_uint32),
+        ("pbi_uid", ctypes.c_uint32),
+        ("pbi_gid", ctypes.c_uint32),
+        ("pbi_ruid", ctypes.c_uint32),
+        ("pbi_rgid", ctypes.c_uint32),
+        ("pbi_svuid", ctypes.c_uint32),
+        ("pbi_svgid", ctypes.c_uint32),
+        ("rfu_1", ctypes.c_uint32),
+        ("pbi_comm", ctypes.c_char * 16),
+        ("pbi_name", ctypes.c_char * 32),
+        ("pbi_nfiles", ctypes.c_uint32),
+        ("pbi_pgid", ctypes.c_uint32),
+        ("pbi_pjobc", ctypes.c_uint32),
+        ("e_tdev", ctypes.c_uint32),
+        ("e_tpgid", ctypes.c_uint32),
+        ("pbi_nice", ctypes.c_int32),
+        ("pbi_start_tvsec", ctypes.c_uint64),
+        ("pbi_start_tvusec", ctypes.c_uint64),
+    ]
+
+
 def process_start_time(pid: int) -> str | None:
+    if sys.platform == "darwin":
+        try:
+            proc_pidinfo = ctypes.CDLL("/usr/lib/libproc.dylib").proc_pidinfo
+        except (OSError, AttributeError):
+            return None
+        proc_pidinfo.argtypes = [
+            ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int,
+        ]
+        proc_pidinfo.restype = ctypes.c_int
+        info = DarwinProcBsdInfo()
+        size = ctypes.sizeof(info)
+        # PROC_PIDTBSDINFO = 3; retain microseconds to detect PID reuse.
+        if proc_pidinfo(pid, 3, 0, ctypes.byref(info), size) != size:
+            return None
+        if info.pbi_pid != pid:
+            return None
+        return f"{info.pbi_start_tvsec}.{info.pbi_start_tvusec:06d}"
+    if sys.platform != "linux":
+        return None
     try:
         fields = Path(f"/proc/{pid}/stat").read_text().split()
     except OSError:

@@ -14,7 +14,7 @@ workspace files are not migrated or deleted automatically.
 ```text
 Linux source/build tree                  lower, read-only through the overlay
 company repository/src                   upper, writable
-company repository/.ceph-kernel-overlay-work   dedicated FUSE work directory
+company repository/.ceph-kernel-overlay-native-work   dedicated kernel OverlayFS workdir
 company repository/.ceph-kernel-overlay.lock   serializes setup/unmount operations
 company repository/.ceph-kernel-overlay-owner.json   prevents shared-upper mounts
 WORKSPACE/merged                         mounted editor view
@@ -46,8 +46,19 @@ must not overlap the source directories or workspace.
 
 ## Setup
 
-Requires Linux, Python 3.9+, `fuse-overlayfs`, `fusermount3`, and access to
-`/dev/fuse`. No sudo, package installation, or kernel build is performed.
+Requires Linux with kernel OverlayFS support, Python 3.9+, util-linux `mount`
+and `umount`, and a compatible upper filesystem (including xattrs and valid
+`d_type`; ordinary local ext4/btrfs/XFS are typical choices). A shared filesystem
+such as virtiofs must support being an OverlayFS upper on your kernel/host.
+The actual mount is the final compatibility check; dry-run does not probe it.
+Setup rejects a read-only fallback even when `mount` exits successfully and
+unmounts that newly created view before attempting generation/resume.
+
+Run the script as your normal user. **Only `mount` and `umount` use `sudo -n`**;
+database generation, backups, and state writes stay unprivileged. If your sudo
+policy requires authentication, run `sudo -v` first. There is no password prompt
+inside setup, no FUSE fallback, package installation, or kernel build. Native
+mounts use `nosuid,nodev`. Do not run the whole script with sudo.
 
 First inspect the input database:
 
@@ -133,6 +144,26 @@ non-default options again. Layer changes require a separate workspace.
 Close buffers/processes using the mount before unmounting. A busy unmount fails
 normally; the script never uses lazy/forced unmounts or deletes source files.
 
+## Existing FUSE workspaces
+
+This is a backend switch, **not an automatic migration**. Native state is version
+2 with `backend: kernel-overlayfs`; version-1 FUSE workspace/upper ownership
+records are refused without mounting, unmounting, regenerating, or rewriting them.
+`status` can print the legacy layout but returns an actionable migration error.
+Even a new workspace is refused if its company upper has a legacy ownership record,
+including after the old mount has been unmounted. Native mounts use a different
+default workdir so the old FUSE scratch directory is not silently reused.
+
+Keep the old installed script until you are ready to migrate. At that point,
+close editors, explicitly unmount using the old script, and back up/review the
+company upper's FUSE whiteouts, opaque-directory flags, and other overlay xattrs.
+A separate manual migration must preserve their meaning before retiring the old
+ownership record and creating a new native workspace/workdir. Simply deleting
+state or renaming the FUSE workdir is not a metadata conversion. The script does
+not scan/convert arbitrary untracked FUSE metadata; do not bypass the refusal by
+removing ownership records from an unreviewed upper. No migration is performed
+by tests or by editing this chezmoi source.
+
 ## Database editor independently
 
 ```sh
@@ -196,16 +227,33 @@ The original input is unchanged unless it is explicitly also the output.
 python3 -m unittest discover \
   -s ~/.local/share/ceph-kernel-workspace/tests -v
 
-# Adds a real mount/unmount test using disposable fixtures only.
-RUN_FUSE_TESTS=1 python3 -m unittest discover \
+# Adds a real native mount/unmount test using disposable fixtures only.
+# Run sudo -v first if required by your sudo policy.
+RUN_OVERLAY_TESTS=1 python3 -m unittest discover \
   -s ~/.local/share/ceph-kernel-workspace/tests -v
 
-# Optional: put disposable fixtures on a particular filesystem.
-RUN_FUSE_TESTS=1 FUSE_TEST_ROOT=/path/on/virtiofs python3 -m unittest discover \
+# Optional: check another filesystem using disposable fixtures there.
+RUN_OVERLAY_TESTS=1 OVERLAY_TEST_ROOT=/path/on/virtiofs python3 -m unittest discover \
   -s ~/.local/share/ceph-kernel-workspace/tests -v
 ```
 
 `WORKSPACE_TOOLS_BIN=/alternate/bin` selects alternative script versions for
 these tests. Real-mount tests never use your kernel or company repository as a
 layer; they create tiny disposable source trees and verify that the lower file
-contents remain unchanged.
+contents remain unchanged, edits/copy-up/whiteouts work, generated files retain
+user ownership, and resume/refresh/unmount behave correctly. After unmount, the
+test removes only its disposable kernel workdir with sudo because kernel-private
+scratch entries may be root-owned. If unmount fails, fixtures are retained rather
+than recursively deleted through a mount.
+
+To test chezmoi source **without applying it**, stage only the two scripts in a
+temporary bin directory (the tests otherwise default to the installed scripts):
+
+```sh
+bin=$(mktemp -d)
+cp dot_local/bin/executable_setup-ceph-kernel-workspace.py "$bin/setup-ceph-kernel-workspace.py"
+cp dot_local/bin/executable_compile-commands-edit.py "$bin/compile-commands-edit.py"
+WORKSPACE_TOOLS_BIN="$bin" RUN_OVERLAY_TESTS=1 python3 -m unittest discover \
+  -s dot_local/share/ceph-kernel-workspace/tests -v
+rm -r -- "$bin"
+```

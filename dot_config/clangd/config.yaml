@@ -13,19 +13,3 @@ CompileFlags:
       -mrecord-mcount,
       -fno-new-ttp-matching,
     ]
----
-If:
-  PathMatch: '/mnt/mac/Volumes/build_part/ceph/.*/.*\.(cc|cpp|cxx|h|hpp)'
-CompileFlags:
-  Add:
-    - -include
-    - memory
-    - -include
-    - cstdint
-    - -DPTHREAD_STACK_MIN=131072
----
-CompileFlags:
-  Add:
-    - -isystem
-    - /usr/lib/gcc/aarch64-redhat-linux/16/include
-

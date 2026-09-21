@@ -73,119 +73,455 @@ DEFAULT_S3_BUCKET="${DEFAULT_S3_BUCKET:-infra-kfs}"
 export AWS_EC2_METADATA_DISABLED=true
 
 _s3_check_deps() {
-  if ! command -v aws >/dev/null 2>&1; then
-    print -u2 "Error: 'aws' CLI not found. Please install it."
-    return 1
-  fi
+    if ! command -v aws >/dev/null 2>&1; then
+        echo "Error: 'aws' CLI not found. Please install it." >&2
+        return 1
+    fi
 }
 
 _s3_resolve_path() {
-  local s3_path="$1"
+    local s3_path="$1"
 
-  if [[ "$s3_path" == s3://* ]]; then
-    print -r -- "$s3_path"
-    return
-  fi
+    if [[ "$s3_path" == s3://* ]]; then
+        echo "$s3_path"
+        return
+    fi
 
-  if [[ -z "$DEFAULT_S3_BUCKET" ]]; then
-    print -u2 "Warning: No default bucket set. Using path as-is: $s3_path"
-    print -r -- "$s3_path"
-    return
-  fi
+    if [[ -z "$DEFAULT_S3_BUCKET" ]]; then
+        echo "Warning: No default bucket set. Using path as-is: $s3_path" >&2
+        echo "$s3_path"
+        return
+    fi
 
-  print -r -- "s3://${DEFAULT_S3_BUCKET}/${s3_path#/}"
+    echo "s3://${DEFAULT_S3_BUCKET}/${s3_path#/}"
+}
+
+_s3_aws() {
+    _s3_check_deps || return 1
+
+    local -a s3_base_cmd=("aws")
+
+    if [[ -n "$S3_ENDPOINT_URL" ]]; then
+        s3_base_cmd+=("--endpoint-url" "$S3_ENDPOINT_URL")
+    fi
+
+    if [[ -n "$S3_COMMON_FLAGS" ]]; then
+        local -a common_flags_array
+        if [[ -n "${ZSH_VERSION:-}" ]]; then
+            common_flags_array=("${(z)S3_COMMON_FLAGS}")
+        else
+            read -r -a common_flags_array <<< "$S3_COMMON_FLAGS"
+        fi
+        s3_base_cmd+=("${common_flags_array[@]}")
+    fi
+
+    "${s3_base_cmd[@]}" "$@"
 }
 
 _s3_run() {
-  _s3_check_deps || return 1
+    _s3_aws s3 "$@"
+}
 
-  local -a s3_base_cmd=(aws s3)
+_s3ls_usage() {
+    cat >&2 <<'EOF_USAGE'
+Usage: s3ls [-h|--human-readable] [s3_key_or_path]
 
-  if [[ -n "$S3_ENDPOINT_URL" ]]; then
-    s3_base_cmd+=(--endpoint-url "$S3_ENDPOINT_URL")
-  fi
-
-  if [[ -n "$S3_COMMON_FLAGS" ]]; then
-    local -a common_flags_array
-    common_flags_array=("${(@z)S3_COMMON_FLAGS}")
-    s3_base_cmd+=("${common_flags_array[@]}")
-  fi
-
-  "${s3_base_cmd[@]}" "$@"
+List the default bucket, a shorthand key in that bucket, or an s3:// URI.
+  -h, --human-readable  Display sizes in human-readable units.
+      --help            Show this help text.
+EOF_USAGE
 }
 
 s3ls() {
-  local s3_path_arg="${1:-}"
-  local s3_path
+    local human_readable=0
+    local s3_path_arg=
+    local s3_path
+    local -a ls_args
 
-  if [[ -z "$s3_path_arg" ]]; then
-    if [[ -n "$DEFAULT_S3_BUCKET" ]]; then
-      s3_path="s3://${DEFAULT_S3_BUCKET}/"
+    while (($# > 0)); do
+        case "$1" in
+            -h|--human-readable)
+                human_readable=1
+                ;;
+            --help)
+                _s3ls_usage
+                return 0
+                ;;
+            --)
+                shift
+                if [[ -n "$s3_path_arg" ]] || (($# > 1)); then
+                    _s3ls_usage
+                    return 1
+                fi
+                s3_path_arg="${1:-}"
+                break
+                ;;
+            -*)
+                echo "Error: Unknown s3ls option: $1" >&2
+                _s3ls_usage
+                return 1
+                ;;
+            *)
+                if [[ -n "$s3_path_arg" ]]; then
+                    _s3ls_usage
+                    return 1
+                fi
+                s3_path_arg="$1"
+                ;;
+        esac
+        shift
+    done
+
+    if [[ -z "$s3_path_arg" ]]; then
+        if [[ -n "$DEFAULT_S3_BUCKET" ]]; then
+            s3_path="s3://${DEFAULT_S3_BUCKET}/"
+        else
+            s3_path="s3://"
+        fi
     else
-      s3_path="s3://"
+        s3_path=$(_s3_resolve_path "$s3_path_arg")
     fi
-  else
-    s3_path=$(_s3_resolve_path "$s3_path_arg")
-  fi
 
-  print -u2 "Listing: $s3_path..."
-  _s3_run ls "$s3_path" || {
-    print -u2 "Error: Failed to list '$s3_path'"
-    return 1
-  }
+    echo "Listing: $s3_path..." >&2
+    ls_args=(ls "$s3_path")
+    if [[ "$human_readable" == 1 ]]; then
+        ls_args+=(--human-readable)
+    fi
+    _s3_run "${ls_args[@]}" || {
+        echo "Error: Failed to list '$s3_path'" >&2
+        return 1
+    }
 }
 
-s3up() {
-  if (( $# != 2 )); then
-    print -u2 "Usage: s3up <local_file> <s3_key_or_path>"
-    print -u2 "Example (default bucket): s3up ./file.txt my-key.txt"
-    print -u2 "Example (full path):    s3up ./file.txt s3://other-bucket/my-key.txt"
-    return 1
-  fi
+_s3cp_usage() {
+    cat >&2 <<'EOF_USAGE'
+Usage: s3cp <source> <destination>
 
-  local local_file="$1"
-  local s3_path_arg="$2"
-  local s3_path
-  s3_path=$(_s3_resolve_path "$s3_path_arg")
+Copy a file between the local filesystem and S3, or between two s3:// URIs.
+Shorthand S3 keys use DEFAULT_S3_BUCKET. When neither path is an s3:// URI,
+a local-looking destination such as ./ selects a download; otherwise an
+existing source is uploaded and a missing source is downloaded. Use an explicit
+s3:// URI to resolve an ambiguous local/remote filename.
 
-  if [[ ! -f "$local_file" ]]; then
-    print -u2 "Error: Local file not found: $local_file"
-    return 1
-  fi
-
-  print -u2 "Uploading: $local_file -> $s3_path..."
-  _s3_run cp "$local_file" "$s3_path" || {
-    print -u2 "Error: Failed to upload '$local_file' to '$s3_path'"
-    return 1
-  }
+Examples:
+  s3cp ./file.txt my-key.txt
+  s3cp my-key.txt ./
+  s3cp ./file.txt s3://other-bucket/my-key.txt
+  s3cp s3://other-bucket/my-key.txt ./
+EOF_USAGE
 }
 
-s3down() {
-  if (( $# == 0 || $# > 3 )); then
-    print -u2 "Usage: s3down <s3_key_or_path> [local_path] [--recursive]"
-    print -u2 "Example (file):      s3down my-key.txt ./"
-    print -u2 "Example (directory): s3down my-directory/ ./my-directory --recursive"
-    return 1
-  fi
-
-  local s3_path_arg="$1"
-  local local_path="${2:-.}"
-  local recursive_flag="${3:-}"
-  local s3_path
-
-  if [[ -n "$recursive_flag" && "$recursive_flag" != "--recursive" ]]; then
-    print -u2 "Error: Unknown option: $recursive_flag"
-    return 1
-  fi
-
-  s3_path=$(_s3_resolve_path "$s3_path_arg")
-
-  print -u2 "Downloading: $s3_path -> $local_path..."
-  _s3_run cp "$s3_path" "$local_path" ${recursive_flag:+"$recursive_flag"} || {
-    print -u2 "Error: Failed to download '$s3_path' to '$local_path'"
-    return 1
-  }
+_s3_is_local_destination_hint() {
+    case "$1" in
+        .|..|/*|./*|../*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
+
+s3cp() {
+    if [[ "${1:-}" == --help ]]; then
+        _s3cp_usage
+        return 0
+    fi
+    if [[ "${1:-}" == -- ]]; then
+        shift
+    fi
+    if [[ $# -ne 2 ]]; then
+        _s3cp_usage
+        return 1
+    fi
+
+    local source="$1"
+    local destination="$2"
+    local resolved_source="$source"
+    local resolved_destination="$destination"
+    local operation=copy
+
+    if [[ "$source" == s3://* && "$destination" == s3://* ]]; then
+        operation=copy
+    elif [[ "$source" == s3://* ]]; then
+        operation=download
+    elif [[ "$destination" == s3://* ]]; then
+        operation=upload
+    elif _s3_is_local_destination_hint "$destination"; then
+        operation=download
+        resolved_source=$(_s3_resolve_path "$source")
+    elif [[ -e "$source" || -L "$source" ]]; then
+        operation=upload
+        resolved_destination=$(_s3_resolve_path "$destination")
+    else
+        operation=download
+        resolved_source=$(_s3_resolve_path "$source")
+    fi
+
+    if [[ "$operation" == upload && ! -f "$source" ]]; then
+        echo "Error: Local file not found or not a regular file: $source" >&2
+        return 1
+    fi
+
+    case "$operation" in
+        upload) echo "Uploading: $resolved_source -> $resolved_destination..." >&2 ;;
+        download) echo "Downloading: $resolved_source -> $resolved_destination..." >&2 ;;
+        *) echo "Copying: $resolved_source -> $resolved_destination..." >&2 ;;
+    esac
+    _s3_run cp "$resolved_source" "$resolved_destination" || {
+        echo "Error: Failed to copy '$resolved_source' to '$resolved_destination'" >&2
+        return 1
+    }
+}
+
+# Print remote completion candidates, one per line. Object listing is bounded
+# and uses short timeouts so an unavailable endpoint does not block the shell.
+_s3_remote_candidates() {
+    local typed="$1"
+    local bucket key bucket_fragment candidate
+    local explicit_uri=0
+    local display_leading_slash=
+
+    if [[ "$typed" == s3://* ]]; then
+        explicit_uri=1
+        candidate=${typed#s3://}
+        if [[ "$candidate" != */* ]]; then
+            bucket_fragment="$candidate"
+            if [[ -n "$DEFAULT_S3_BUCKET" && "$DEFAULT_S3_BUCKET" == "$bucket_fragment"* ]]; then
+                printf 's3://%s/\n' "$DEFAULT_S3_BUCKET"
+            fi
+            while IFS= read -r bucket; do
+                [[ -n "$bucket" && "$bucket" == "$bucket_fragment"* ]] || continue
+                printf 's3://%s/\n' "$bucket"
+            done < <(
+                AWS_MAX_ATTEMPTS=1 _s3_aws \
+                    --cli-connect-timeout 2 --cli-read-timeout 5 --no-paginate \
+                    s3api list-buckets --query 'Buckets[].Name' --output text \
+                    2>/dev/null | tr '\t' '\n'
+            )
+            return 0
+        fi
+        bucket=${candidate%%/*}
+        key=${candidate#*/}
+    else
+        [[ -n "$DEFAULT_S3_BUCKET" ]] || return 0
+        bucket="$DEFAULT_S3_BUCKET"
+        key=${typed#/}
+        [[ "$typed" == /* ]] && display_leading_slash=/
+    fi
+
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" ]] || continue
+        if [[ "$explicit_uri" == 1 ]]; then
+            printf 's3://%s/%s\n' "$bucket" "$candidate"
+        else
+            printf '%s%s\n' "$display_leading_slash" "$candidate"
+        fi
+    done < <(
+        AWS_MAX_ATTEMPTS=1 _s3_aws \
+            --cli-connect-timeout 2 --cli-read-timeout 5 --no-paginate \
+            s3api list-objects-v2 --bucket "$bucket" --prefix "$key" \
+            --delimiter / --max-keys 200 \
+            --query '[CommonPrefixes[].Prefix, Contents[].Key][]' --output text \
+            2>/dev/null | tr '\t' '\n'
+    )
+}
+
+# Bash completion helpers.
+_s3_bash_completion_add() {
+    local candidate="$1"
+    local existing
+    for existing in "${COMPREPLY[@]}"; do
+        [[ "$existing" == "$candidate" ]] && return 0
+    done
+    COMPREPLY+=("$candidate")
+}
+
+_s3_bash_complete_local() {
+    local current="$1"
+    local candidate
+    while IFS= read -r candidate; do
+        [[ -d "$candidate" && "$candidate" != */ ]] && candidate+=/
+        _s3_bash_completion_add "$candidate"
+    done < <(compgen -f -- "$current")
+}
+
+_s3_bash_complete_remote() {
+    local current="$1"
+    local candidate
+    while IFS= read -r candidate; do
+        _s3_bash_completion_add "$candidate"
+    done < <(_s3_remote_candidates "$current")
+}
+
+_s3ls_bash_completion() {
+    local current="${COMP_WORDS[COMP_CWORD]}"
+    local candidate word
+    local path_count=0
+    local options_ended=0
+    local i
+    COMPREPLY=()
+
+    for ((i = 1; i < COMP_CWORD; i++)); do
+        word=${COMP_WORDS[i]}
+        if [[ "$options_ended" == 0 && "$word" == -- ]]; then
+            options_ended=1
+        elif [[ "$options_ended" == 0 && \
+                ( "$word" == -h || "$word" == --human-readable || "$word" == --help ) ]]; then
+            :
+        else
+            path_count=$((path_count + 1))
+        fi
+    done
+
+    if [[ "$options_ended" == 0 && "$current" == -* ]]; then
+        while IFS= read -r candidate; do
+            _s3_bash_completion_add "$candidate"
+        done < <(compgen -W '-h --human-readable --help' -- "$current")
+    elif ((path_count == 0)); then
+        _s3_bash_complete_remote "$current"
+    fi
+    compopt -o filenames -o nospace 2>/dev/null || true
+}
+
+_s3cp_bash_completion() {
+    local current="${COMP_WORDS[COMP_CWORD]}"
+    local source=
+    local candidate word
+    local operand_count=0
+    local options_ended=0
+    local i
+    COMPREPLY=()
+
+    for ((i = 1; i < COMP_CWORD; i++)); do
+        word=${COMP_WORDS[i]}
+        if [[ "$options_ended" == 0 && "$word" == -- ]]; then
+            options_ended=1
+        elif [[ "$options_ended" == 0 && "$word" == --help ]]; then
+            :
+        else
+            operand_count=$((operand_count + 1))
+            [[ "$operand_count" == 1 ]] && source="$word"
+        fi
+    done
+
+    if [[ "$options_ended" == 0 && "$current" == -* ]]; then
+        while IFS= read -r candidate; do
+            _s3_bash_completion_add "$candidate"
+        done < <(compgen -W '--help' -- "$current")
+    elif ((operand_count == 0)); then
+        if [[ "$current" == s3://* ]]; then
+            _s3_bash_complete_remote "$current"
+        else
+            _s3_bash_complete_local "$current"
+            case "$current" in
+                /*|./*|../*) ;;
+                *) _s3_bash_complete_remote "$current" ;;
+            esac
+        fi
+    elif ((operand_count == 1)); then
+        if [[ "$current" == s3://* ]]; then
+            _s3_bash_complete_remote "$current"
+        elif [[ "$source" == s3://* ]]; then
+            _s3_bash_complete_local "$current"
+        elif [[ -e "$source" || -L "$source" ]]; then
+            _s3_bash_complete_remote "$current"
+        else
+            _s3_bash_complete_local "$current"
+        fi
+    fi
+
+    compopt -o filenames -o nospace 2>/dev/null || true
+}
+
+# Zsh uses its native completion API instead of Bash's COMP_WORDS/COMPREPLY.
+_s3_zsh_complete_remote() {
+    local current="$1"
+    local candidate
+    local -a candidates=()
+
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" ]] && candidates+=("$candidate")
+    done < <(_s3_remote_candidates "$current")
+
+    (( ${#candidates[@]} > 0 )) && compadd -S '' -- "${candidates[@]}"
+}
+
+_s3ls_zsh_completion() {
+    local current="${words[CURRENT]}"
+    local word
+    local path_count=0
+    local options_ended=0
+    local i
+
+    for ((i = 2; i < CURRENT; i++)); do
+        word=${words[i]}
+        if [[ "$options_ended" == 0 && "$word" == -- ]]; then
+            options_ended=1
+        elif [[ "$options_ended" == 0 && \
+                ( "$word" == -h || "$word" == --human-readable || "$word" == --help ) ]]; then
+            :
+        else
+            path_count=$((path_count + 1))
+        fi
+    done
+
+    if [[ "$options_ended" == 0 && "$current" == -* ]]; then
+        compadd -S '' -- -h --human-readable --help
+    elif ((path_count == 0)); then
+        _s3_zsh_complete_remote "$current"
+    fi
+}
+
+_s3cp_zsh_completion() {
+    local current="${words[CURRENT]}"
+    local source=
+    local word
+    local operand_count=0
+    local options_ended=0
+    local i
+
+    for ((i = 2; i < CURRENT; i++)); do
+        word=${words[i]}
+        if [[ "$options_ended" == 0 && "$word" == -- ]]; then
+            options_ended=1
+        elif [[ "$options_ended" == 0 && "$word" == --help ]]; then
+            :
+        else
+            operand_count=$((operand_count + 1))
+            [[ "$operand_count" == 1 ]] && source="$word"
+        fi
+    done
+
+    if [[ "$options_ended" == 0 && "$current" == -* ]]; then
+        compadd -S '' -- --help
+    elif ((operand_count == 0)); then
+        if [[ "$current" == s3://* ]]; then
+            _s3_zsh_complete_remote "$current"
+        else
+            _files
+            case "$current" in
+                /*|./*|../*) ;;
+                *) _s3_zsh_complete_remote "$current" ;;
+            esac
+        fi
+    elif ((operand_count == 1)); then
+        if [[ "$current" == s3://* ]]; then
+            _s3_zsh_complete_remote "$current"
+        elif [[ "$source" == s3://* ]]; then
+            _files
+        elif [[ -e "$source" || -L "$source" ]]; then
+            _s3_zsh_complete_remote "$current"
+        else
+            _files
+        fi
+    fi
+}
+
+if [[ -n "${BASH_VERSION:-}" ]]; then
+    complete -F _s3ls_bash_completion s3ls
+    complete -F _s3cp_bash_completion s3cp
+elif [[ -n "${ZSH_VERSION:-}" ]] && command -v compdef >/dev/null 2>&1; then
+    compdef _s3ls_zsh_completion s3ls
+    compdef _s3cp_zsh_completion s3cp
+fi
+
 
 
 relay() {

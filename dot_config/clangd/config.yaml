@@ -12,4 +12,5 @@ CompileFlags:
       -fsanitize=*,
       -mrecord-mcount,
       -fno-new-ttp-matching,
+      -fno-var-tracking-assignments,
     ]

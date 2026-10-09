@@ -24,11 +24,14 @@ import re
 import shlex
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import uuid
-from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass, fields
+from functools import partial
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypeVar
 
 
 class EditError(Exception):
@@ -255,12 +258,45 @@ WP_SEPARATE_PATH_OPTIONS = frozenset(
 WP_JOINED_PATH_OPTIONS = ("-MMD", "-MF", "-MJ", "-MD", "-I", "-isystem")
 
 
+# A deliberately restricted shell grammar: literal words, literal quotes, and
+# shlex whitespace. Anything outside it uses the original diagnostic parser.
+_LITERAL_COMMAND_PART = re.compile(
+    r"(?P<space>[ \t\r]+)|(?P<plain>[^\s'\"\\;|&<>()$`*?[{}~#]+)"
+    r"|'(?P<single>[^']*)'|\"(?P<double>[^\"\\$`\n]*)\""
+)
+
+
+def split_literal_command(command: str) -> Optional[List[str]]:
+    argv: List[str] = []
+    parts: List[str] = []
+    position = 0
+    while position < len(command):
+        match = _LITERAL_COMMAND_PART.match(command, position)
+        if match is None:
+            return None
+        if match.lastgroup == "space":
+            if parts:
+                argv.append("".join(parts))
+                parts.clear()
+        else:
+            # Keeping empty quoted parts preserves empty arguments.
+            parts.append(match.group(match.lastgroup))
+        position = match.end()
+    if parts:
+        argv.append("".join(parts))
+    return argv
+
+
 def validate_simple_command(command: str, entry_index: int) -> List[str]:
-    """Reject active shell syntax, then parse a simple command with shlex."""
+    """Parse literal commands quickly; use shlex and diagnostics for other syntax."""
     if not command:
         raise EditError("entry {} 'command' must not be empty".format(entry_index))
     if "\0" in command:
         raise EditError("entry {} 'command' contains a NUL byte".format(entry_index))
+
+    literal_argv = split_literal_command(command)
+    if literal_argv is not None:
+        return validate_command_argv(literal_argv, entry_index)
 
     quote: Optional[str] = None
     escaped = False
@@ -360,6 +396,10 @@ def validate_simple_command(command: str, entry_index: int) -> List[str]:
         raise EditError(
             "entry {} command cannot be parsed safely: {}".format(entry_index, exc)
         ) from exc
+    return validate_command_argv(argv, entry_index)
+
+
+def validate_command_argv(argv: List[str], entry_index: int) -> List[str]:
     if not argv:
         raise EditError("entry {} 'command' has no arguments".format(entry_index))
     if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", argv[0]):
@@ -398,67 +438,106 @@ def load_database(input_path: str) -> object:
         raise EditError("cannot read {}: {}".format(input_path, exc)) from exc
 
 
-def validate_database(database: object, database_parent: str) -> List[SourceEntry]:
+_Input = TypeVar("_Input")
+_Output = TypeVar("_Output")
+
+
+def worker_count() -> int:
+    """Respect nproc's available-CPU count, including its environment overrides."""
+    try:
+        return max(1, int(subprocess.check_output(["nproc"], text=True)))
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        if hasattr(os, "sched_getaffinity"):
+            return max(1, len(os.sched_getaffinity(0)))
+        return max(1, os.cpu_count() or 1)
+
+
+def parallel_entries(
+    operation: Callable[..., _Output],
+    entries: Sequence[_Input],
+    *other_entries: Iterable[object],
+    executor: Optional[ProcessPoolExecutor] = None,
+) -> List[_Output]:
+    """Process independent entries concurrently; retain input/error order."""
+    if not entries:
+        return []
+    workers = min(worker_count(), len(entries))
+    # Batch IPC while leaving several chunks per worker for load balancing.
+    chunksize = max(1, (len(entries) + workers * 4 - 1) // (workers * 4))
+    if executor is not None:
+        return list(executor.map(operation, entries, *other_entries, chunksize=chunksize))
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(operation, entries, *other_entries, chunksize=chunksize))
+
+
+def validate_entry(index: int, entry: object, database_parent: str) -> SourceEntry:
+    label = "entry {}".format(index)
+    if not isinstance(entry, dict):
+        raise EditError("{} must be a JSON object".format(label))
+
+    if "directory" not in entry:
+        raise EditError("{} is missing 'directory'".format(label))
+    if "file" not in entry:
+        raise EditError("{} is missing 'file'".format(label))
+    raw_directory = _require_path_text(entry["directory"], label + " 'directory'")
+    raw_file = _require_path_text(entry["file"], label + " 'file'")
+    directory = lexical_absolute(raw_directory, database_parent)
+    source_file = lexical_absolute(raw_file, directory)
+
+    output: Optional[str] = None
+    if "output" in entry:
+        raw_output = _require_path_text(entry["output"], label + " 'output'")
+        output = lexical_absolute(raw_output, directory)
+
+    has_arguments = "arguments" in entry
+    has_command = "command" in entry
+    if not has_arguments and not has_command:
+        raise EditError(
+            "{} must contain 'arguments', 'command', or both".format(label)
+        )
+
+    if has_arguments:
+        arguments = entry["arguments"]
+        if not isinstance(arguments, list) or not arguments:
+            raise EditError(
+                "{} 'arguments' must be a non-empty JSON array".format(label)
+            )
+        for argument_index, token in enumerate(arguments):
+            if not isinstance(token, str):
+                raise EditError(
+                    "{} 'arguments'[{}] must be a string".format(
+                        label, argument_index
+                    )
+                )
+            if "\0" in token:
+                raise EditError(
+                    "{} 'arguments'[{}] contains a NUL byte".format(
+                        label, argument_index
+                    )
+                )
+
+    command_argv: Optional[List[str]] = None
+    if has_command:
+        command = entry["command"]
+        if not isinstance(command, str):
+            raise EditError("{} 'command' must be a string".format(label))
+        command_argv = validate_simple_command(command, index)
+    return SourceEntry(index, directory, source_file, output, command_argv)
+
+
+def validate_database(
+    database: object,
+    database_parent: str,
+    executor: Optional[ProcessPoolExecutor] = None,
+) -> List[SourceEntry]:
     if not isinstance(database, list):
         raise EditError("compilation database must be a JSON array")
-
-    sources: List[SourceEntry] = []
-    for index, entry in enumerate(database):
-        label = "entry {}".format(index)
-        if not isinstance(entry, dict):
-            raise EditError("{} must be a JSON object".format(label))
-
-        if "directory" not in entry:
-            raise EditError("{} is missing 'directory'".format(label))
-        if "file" not in entry:
-            raise EditError("{} is missing 'file'".format(label))
-        raw_directory = _require_path_text(entry["directory"], label + " 'directory'")
-        raw_file = _require_path_text(entry["file"], label + " 'file'")
-        directory = lexical_absolute(raw_directory, database_parent)
-        source_file = lexical_absolute(raw_file, directory)
-
-        output: Optional[str] = None
-        if "output" in entry:
-            raw_output = _require_path_text(entry["output"], label + " 'output'")
-            output = lexical_absolute(raw_output, directory)
-
-        has_arguments = "arguments" in entry
-        has_command = "command" in entry
-        if not has_arguments and not has_command:
-            raise EditError(
-                "{} must contain 'arguments', 'command', or both".format(label)
-            )
-
-        if has_arguments:
-            arguments = entry["arguments"]
-            if not isinstance(arguments, list) or not arguments:
-                raise EditError(
-                    "{} 'arguments' must be a non-empty JSON array".format(label)
-                )
-            for argument_index, token in enumerate(arguments):
-                if not isinstance(token, str):
-                    raise EditError(
-                        "{} 'arguments'[{}] must be a string".format(
-                            label, argument_index
-                        )
-                    )
-                if "\0" in token:
-                    raise EditError(
-                        "{} 'arguments'[{}] contains a NUL byte".format(
-                            label, argument_index
-                        )
-                    )
-
-        command_argv: Optional[List[str]] = None
-        if has_command:
-            command = entry["command"]
-            if not isinstance(command, str):
-                raise EditError("{} 'command' must be a string".format(label))
-            command_argv = validate_simple_command(command, index)
-
-        sources.append(SourceEntry(index, directory, source_file, output, command_argv))
-
-    return sources
+    return parallel_entries(
+        partial(validate_entry, database_parent=database_parent),
+        range(len(database)),
+        database,
+        executor=executor,
+    )
 
 
 def common_entry_prefix(sources: Sequence[SourceEntry]) -> Optional[str]:
@@ -671,76 +750,99 @@ class ArgvRewriter:
         return result, self.changed, self.gcc_replaced
 
 
+def rewrite_entry(
+    old_entry: object,
+    source: SourceEntry,
+    mapper: PathMapper,
+    gcc_include: Optional[str],
+) -> Tuple[object, RewriteStats]:
+    entry = copy.deepcopy(old_entry)
+    assert isinstance(old_entry, dict) and isinstance(entry, dict)
+    stats = RewriteStats(entries=1)
+
+    has_arguments = "arguments" in old_entry
+    has_command = "command" in old_entry
+    stats.argument_entries += int(has_arguments)
+    stats.command_entries += int(has_command)
+    stats.both_entries += int(has_arguments and has_command)
+
+    new_directory = mapper.apply(source.directory)
+    new_file = mapper.apply(source.file)
+    new_output = mapper.apply(source.output) if source.output is not None else None
+
+    if entry["directory"] != new_directory:
+        entry["directory"] = new_directory
+        stats.directory_fields_changed += 1
+    if entry["file"] != new_file:
+        entry["file"] = new_file
+        stats.file_fields_changed += 1
+    if source.output is not None and entry["output"] != new_output:
+        entry["output"] = new_output
+        stats.output_fields_changed += 1
+
+    if has_arguments:
+        arguments = old_entry["arguments"]
+        assert isinstance(arguments, list)
+        rewriter = ArgvRewriter(
+            mapper,
+            source.directory,
+            new_directory,
+            source.file,
+            source.output,
+            gcc_include,
+        )
+        rewritten, changed, gcc_replaced = rewriter.rewrite(arguments)
+        if changed:
+            entry["arguments"] = rewritten
+        stats.argument_tokens_changed += changed
+        stats.gcc_includes_replaced += gcc_replaced
+
+    if has_command:
+        assert source.command_argv is not None
+        rewriter = ArgvRewriter(
+            mapper,
+            source.directory,
+            new_directory,
+            source.file,
+            source.output,
+            gcc_include,
+        )
+        rewritten, changed, gcc_replaced = rewriter.rewrite(source.command_argv)
+        if changed:
+            entry["command"] = shlex.join(rewritten)
+        stats.command_tokens_changed += changed
+        stats.gcc_includes_replaced += gcc_replaced
+
+    if entry != old_entry:
+        stats.entries_changed += 1
+    return entry, stats
+
+
 def rewrite_database(
     database: List[object],
     sources: Sequence[SourceEntry],
     mapper: PathMapper,
     gcc_include: Optional[str],
+    executor: Optional[ProcessPoolExecutor] = None,
 ) -> Tuple[List[object], RewriteStats]:
-    result = copy.deepcopy(database)
-    stats = RewriteStats(entries=len(sources))
-
-    for source in sources:
-        old_entry = database[source.index]
-        entry = result[source.index]
-        assert isinstance(old_entry, dict) and isinstance(entry, dict)
-
-        has_arguments = "arguments" in old_entry
-        has_command = "command" in old_entry
-        stats.argument_entries += int(has_arguments)
-        stats.command_entries += int(has_command)
-        stats.both_entries += int(has_arguments and has_command)
-
-        new_directory = mapper.apply(source.directory)
-        new_file = mapper.apply(source.file)
-        new_output = mapper.apply(source.output) if source.output is not None else None
-
-        if entry["directory"] != new_directory:
-            entry["directory"] = new_directory
-            stats.directory_fields_changed += 1
-        if entry["file"] != new_file:
-            entry["file"] = new_file
-            stats.file_fields_changed += 1
-        if source.output is not None and entry["output"] != new_output:
-            entry["output"] = new_output
-            stats.output_fields_changed += 1
-
-        if has_arguments:
-            arguments = old_entry["arguments"]
-            assert isinstance(arguments, list)
-            rewriter = ArgvRewriter(
-                mapper,
-                source.directory,
-                new_directory,
-                source.file,
-                source.output,
-                gcc_include,
+    rewritten = parallel_entries(
+        partial(rewrite_entry, mapper=mapper, gcc_include=gcc_include),
+        [database[source.index] for source in sources],
+        sources,
+        executor=executor,
+    )
+    # Workers own their copies and counters; only the parent process reduces totals.
+    stats = RewriteStats()
+    result: List[object] = []
+    stat_fields = fields(RewriteStats)
+    for entry, entry_stats in rewritten:
+        result.append(entry)
+        for field in stat_fields:
+            setattr(
+                stats,
+                field.name,
+                getattr(stats, field.name) + getattr(entry_stats, field.name),
             )
-            rewritten, changed, gcc_replaced = rewriter.rewrite(arguments)
-            if changed:
-                entry["arguments"] = rewritten
-            stats.argument_tokens_changed += changed
-            stats.gcc_includes_replaced += gcc_replaced
-
-        if has_command:
-            assert source.command_argv is not None
-            rewriter = ArgvRewriter(
-                mapper,
-                source.directory,
-                new_directory,
-                source.file,
-                source.output,
-                gcc_include,
-            )
-            rewritten, changed, gcc_replaced = rewriter.rewrite(source.command_argv)
-            if changed:
-                entry["command"] = shlex.join(rewritten)
-            stats.command_tokens_changed += changed
-            stats.gcc_includes_replaced += gcc_replaced
-
-        if entry != old_entry:
-            stats.entries_changed += 1
-
     return result, stats
 
 
@@ -979,6 +1081,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run(options: argparse.Namespace) -> int:
+    # Start workers lazily and reuse them across validation and rewriting.
+    with ProcessPoolExecutor(max_workers=worker_count()) as executor:
+        return run_with_executor(options, executor)
+
+
+def run_with_executor(
+    options: argparse.Namespace, executor: ProcessPoolExecutor
+) -> int:
     cwd = lexical_absolute(os.getcwd(), "/")
     input_path = lexical_absolute(options.input, cwd)
     if not os.path.isfile(input_path):
@@ -986,7 +1096,7 @@ def run(options: argparse.Namespace) -> int:
     database_parent = os.path.dirname(input_path)
 
     database = load_database(input_path)
-    sources = validate_database(database, database_parent)
+    sources = validate_database(database, database_parent, executor)
     common_prefix = common_entry_prefix(sources)
 
     mappings: List[PathMap] = []
@@ -1024,7 +1134,7 @@ def run(options: argparse.Namespace) -> int:
             )
 
     assert isinstance(database, list)
-    rewritten, stats = rewrite_database(database, sources, mapper, gcc_include)
+    rewritten, stats = rewrite_database(database, sources, mapper, gcc_include, executor)
 
     no_write = options.inspect or options.dry_run
     output: Optional[str] = None

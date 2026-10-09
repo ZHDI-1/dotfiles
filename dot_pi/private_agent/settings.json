@@ -43,52 +43,44 @@
     },
     "agentOverrides": {
       "scout": {
-        "description": "GPT-5.6 Sol medium-effort repository reconnaissance.",
-        "model": "openai-codex/gpt-5.6-sol",
-        "thinking": "medium",
-        "fallbackModels": []
+        "description": "GPT-6 medium-effort repository reconnaissance.",
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "medium"
       },
       "summarizer": {
-        "description": "GPT-5.6 Sol low-effort summarization of logs, tool output, and research.",
-        "model": "openai-codex/gpt-5.6-sol",
-        "thinking": "low",
-        "fallbackModels": []
+        "description": "GPT-6 low-effort summarization of logs, tool output, and research.",
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "low"
       },
       "researcher": {
-        "description": "GPT-5.6 Sol maximum-effort external documentation and web research specialist.",
-        "model": "openai-codex/gpt-5.6-sol",
-        "thinking": "max",
-        "fallbackModels": []
+        "description": "GPT-6 extra-high-effort external documentation and web research specialist.",
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "xhigh"
       },
       "reviewer": {
-        "description": "GPT-5.6 Sol extra-high-effort correctness, regression, edge-case, and test review.",
-        "model": "openai-codex/gpt-5.6-sol",
-        "thinking": "xhigh",
-        "fallbackModels": []
+        "description": "GPT-6 extra-high-effort correctness, regression, edge-case, and test review.",
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "xhigh"
       },
       "oracle": {
         "description": "GPT-6 Astra maximum-effort second opinion for genuinely difficult decisions.",
         "model": "openai-codex/gpt-6-astra",
-        "thinking": "max",
-        "fallbackModels": []
+        "thinking": "max"
       },
       "worker": {
-        "description": "GPT-5.6 Sol extra-high-effort implementation worker for delegated coding tasks.",
-        "model": "openai-codex/gpt-5.6-sol",
-        "thinking": "xhigh",
-        "fallbackModels": []
+        "description": "GPT-6 high-effort implementation worker for delegated coding tasks.",
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "high"
       },
       "delegate": {
-        "description": "GPT-5.6 Sol high-effort general worker; choose a specialist for bounded work.",
-        "model": "openai-codex/gpt-5.6-sol",
-        "thinking": "high",
-        "fallbackModels": []
+        "description": "GPT-6 high-effort general worker; choose a specialist for bounded work.",
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "high"
       },
       "k3-specialist": {
         "description": "Kimi K3 for explicit requests or narrowly scoped authorized defensive technical work.",
         "model": "ollama-cloud/kimi-k3",
-        "thinking": "max",
-        "fallbackModels": []
+        "thinking": "max"
       }
     }
   },

@@ -57,6 +57,7 @@ bindkey '^u' backward-kill-line
 unsetopt beep
 
 eval "$(fnm env --shell zsh --use-on-cd)"
+eval "$(direnv hook zsh)"
 
 if (( $+commands[orbctl] )); then
   eval "$(orbctl completion zsh)"

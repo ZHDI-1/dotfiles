@@ -1,11 +1,13 @@
 {{- /* chezmoi:modify-template */ -}}
 {{- /* Own only the paths below; preserve all other local Codex settings.
-       TOML serialization normalizes formatting and does not preserve comments. */ -}}
+       Preserve the original text when settings already match. Actual setting
+       changes serialize TOML, normalizing formatting and dropping comments. */ -}}
 {{- $config := dict -}}
 {{- if .chezmoi.stdin | trim -}}
 {{- $config = fromToml .chezmoi.stdin -}}
 {{- end -}}
-{{- $config |
+{{- $before := $config | toToml -}}
+{{- $after := $config |
     setValueAtPath "personality" "pragmatic" |
     setValueAtPath "approval_policy" "never" |
     setValueAtPath "approvals_reviewer" "user" |
@@ -44,5 +46,11 @@
     setValueAtPath "desktop.appearanceDarkChromeTheme.semanticColors.skill" "#b16286" |
     setValueAtPath "tui.status_line" (list "model-with-reasoning" "current-dir" "project-name" "git-branch" "branch-changes" "run-state" "context-used" "five-hour-limit" "weekly-limit" "task-progress") |
     setValueAtPath "tui.status_line_use_colors" true |
+    setValueAtPath "tui.alternate_screen" "never" |
     setValueAtPath "tui.theme" "gruvbox-light" |
     toToml -}}
+{{- if eq $before $after -}}
+{{- .chezmoi.stdin -}}
+{{- else -}}
+{{- $after -}}
+{{- end -}}

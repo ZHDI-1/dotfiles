@@ -2,7 +2,7 @@
   "lastChangelogVersion": "0.85.1",
   "theme": "light",
   "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-6-astra",
+  "defaultModel": "gpt-5.6-sol",
   "defaultThinkingLevel": "xhigh",
   "showCacheMissNotices": true,
   "compaction": {
@@ -20,66 +20,67 @@
   ],
   "subagents": {
     "defaultProvider": "openai-codex",
-    "defaultModel": "openai-codex/gpt-6-astra",
+    "defaultModel": "openai-codex/gpt-5.6-sol",
     "defaultThinking": "high",
     "modelScope": {
       "enforce": true,
       "strict": true,
       "allow": [
+        "openai-codex/gpt-5.6-sol",
         "openai-codex/gpt-6-astra",
         "ollama-cloud/kimi-k3"
       ],
       "agents": {
-        "scout": { "allow": ["openai-codex/gpt-6-astra"] },
-        "summarizer": { "allow": ["openai-codex/gpt-6-astra"] },
-        "researcher": { "allow": ["openai-codex/gpt-6-astra"] },
-        "reviewer": { "allow": ["openai-codex/gpt-6-astra"] },
+        "scout": { "allow": ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-6-astra"] },
+        "summarizer": { "allow": ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-6-astra"] },
+        "researcher": { "allow": ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-6-astra"] },
+        "reviewer": { "allow": ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-6-astra"] },
         "oracle": { "allow": ["openai-codex/gpt-6-astra"] },
-        "worker": { "allow": ["openai-codex/gpt-6-astra"] },
-        "delegate": { "allow": ["openai-codex/gpt-6-astra"] },
+        "worker": { "allow": ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-6-astra"] },
+        "delegate": { "allow": ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-6-astra"] },
         "k3-specialist": { "allow": ["ollama-cloud/kimi-k3"] }
       }
     },
     "agentOverrides": {
       "scout": {
-        "description": "GPT-6 medium-effort repository reconnaissance.",
-        "model": "openai-codex/gpt-6-astra",
+        "description": "GPT-5.6 Sol medium-effort repository reconnaissance.",
+        "model": "openai-codex/gpt-5.6-sol",
         "thinking": "medium",
         "fallbackModels": []
       },
       "summarizer": {
-        "description": "GPT-6 low-effort summarization of logs, tool output, and research.",
-        "model": "openai-codex/gpt-6-astra",
+        "description": "GPT-5.6 Sol low-effort summarization of logs, tool output, and research.",
+        "model": "openai-codex/gpt-5.6-sol",
         "thinking": "low",
         "fallbackModels": []
       },
       "researcher": {
-        "description": "GPT-6 extra-high-effort external documentation and web research specialist.",
-        "model": "openai-codex/gpt-6-astra",
-        "thinking": "xhigh",
+        "description": "GPT-5.6 Sol maximum-effort external documentation and web research specialist.",
+        "model": "openai-codex/gpt-5.6-sol",
+        "thinking": "max",
         "fallbackModels": []
       },
       "reviewer": {
-        "description": "GPT-6 extra-high-effort correctness, regression, edge-case, and test review.",
-        "model": "openai-codex/gpt-6-astra",
+        "description": "GPT-5.6 Sol extra-high-effort correctness, regression, edge-case, and test review.",
+        "model": "openai-codex/gpt-5.6-sol",
         "thinking": "xhigh",
         "fallbackModels": []
       },
       "oracle": {
-        "description": "GPT-6 maximum-effort second opinion for genuinely difficult decisions.",
+        "description": "GPT-6 Astra maximum-effort second opinion for genuinely difficult decisions.",
         "model": "openai-codex/gpt-6-astra",
         "thinking": "max",
         "fallbackModels": []
       },
       "worker": {
-        "description": "GPT-6 high-effort implementation worker for delegated coding tasks.",
-        "model": "openai-codex/gpt-6-astra",
-        "thinking": "high",
+        "description": "GPT-5.6 Sol extra-high-effort implementation worker for delegated coding tasks.",
+        "model": "openai-codex/gpt-5.6-sol",
+        "thinking": "xhigh",
         "fallbackModels": []
       },
       "delegate": {
-        "description": "GPT-6 high-effort general worker; choose a specialist for bounded work.",
-        "model": "openai-codex/gpt-6-astra",
+        "description": "GPT-5.6 Sol high-effort general worker; choose a specialist for bounded work.",
+        "model": "openai-codex/gpt-5.6-sol",
         "thinking": "high",
         "fallbackModels": []
       },

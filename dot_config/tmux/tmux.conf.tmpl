@@ -22,6 +22,9 @@ bind-key -r -T prefix M-j resize-pane -D 5
 bind-key -r -T prefix M-l resize-pane -R 5
 bind-key -r -T prefix M-h resize-pane -L 5
 bind-key -T prefix o last-window
+# Add the active command and working directory to the window chooser.
+# Expanding a window shows the same details for each pane.
+bind-key -T prefix w choose-tree -Zw -F '#{?pane_format,#{pane_current_command}#{pane_flags} · #{pane_current_path},window_format,#{window_name}#{window_flags} · #{pane_current_command} · #{pane_current_path},#{session_windows} windows#{?session_attached, (attached),}}'
 
 set -g monitor-bell on
 set -g bell-action any

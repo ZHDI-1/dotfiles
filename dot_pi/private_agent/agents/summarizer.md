@@ -1,7 +1,7 @@
 ---
 name: summarizer
-description: Concise GPT-6 summarization of logs, tool output, and research
-model: openai-codex/gpt-6-astra
+description: Concise GPT-5.6 Sol summarization of logs, tool output, and research
+model: openai-codex/gpt-5.6-sol
 thinking: low
 tools: read, grep, find, ls
 systemPromptMode: replace

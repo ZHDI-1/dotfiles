@@ -47,6 +47,7 @@
     setValueAtPath "tui.status_line" (list "model-with-reasoning" "current-dir" "project-name" "git-branch" "branch-changes" "run-state" "context-used" "five-hour-limit" "weekly-limit" "task-progress") |
     setValueAtPath "tui.status_line_use_colors" true |
     setValueAtPath "tui.alternate_screen" "never" |
+    setValueAtPath "tui.terminal_resize_reflow_max_rows" 0 |
     setValueAtPath "tui.theme" "gruvbox-light" |
     toToml -}}
 {{- if eq $before $after -}}

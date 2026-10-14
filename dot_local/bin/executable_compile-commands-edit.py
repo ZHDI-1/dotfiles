@@ -1041,6 +1041,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("input", metavar="INPUT", help="input compile_commands JSON")
     parser.add_argument("-o", "--output", metavar="PATH", help="atomic output path")
     parser.add_argument(
+        "--force-include-cxx", action="append", default=[], metavar="HEADER",
+        help="force-include a header in C++ entries only (repeatable, idempotent)",
+    )
+    parser.add_argument(
         "--map",
         dest="maps",
         action="append",
@@ -1135,6 +1139,42 @@ def run_with_executor(
 
     assert isinstance(database, list)
     rewritten, stats = rewrite_database(database, sources, mapper, gcc_include, executor)
+
+    headers = list(dict.fromkeys(
+        _require_path_text(header, "--force-include-cxx HEADER")
+        for header in options.force_include_cxx
+    ))
+    for index, entry in enumerate(rewritten if headers else []):
+        before = copy.deepcopy(entry)
+        for key in ("arguments", "command"):
+            if key not in entry:
+                continue
+            argv = (list(entry[key]) if key == "arguments"
+                    else validate_simple_command(entry[key], index))
+            language = None
+            for position, token in enumerate(argv):
+                if token == "-x" and position + 1 < len(argv):
+                    language = argv[position + 1]
+                elif token.startswith("-x") and len(token) > 2:
+                    language = token[2:]
+            is_cxx = (language.startswith("c++") if language and language != "none"
+                      else os.path.splitext(entry["file"])[1] in
+                      {".cc", ".cpp", ".cxx", ".c++", ".C", ".CPP"})
+            if not is_cxx:
+                continue
+            existing = {argv[i + 1] for i, token in enumerate(argv[:-1])
+                        if token == "-include"}
+            existing.update(token[len("-include"):] for token in argv
+                            if token.startswith("-include")
+                            and not token.startswith("-include-pch"))
+            added = [token for header in headers if header not in existing
+                     for token in ("-include", header)]
+            if added:
+                # Insert before any '--' delimiter and source operands.
+                argv[1:1] = added
+                entry[key] = argv if key == "arguments" else shlex.join(argv)
+        if entry != before and before == database[index]:
+            stats.entries_changed += 1
 
     no_write = options.inspect or options.dry_run
     output: Optional[str] = None

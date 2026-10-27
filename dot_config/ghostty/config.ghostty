@@ -21,7 +21,7 @@ mouse-hide-while-typing = true
 scrollback-limit = 10000
 
 # Shell
-command = /opt/homebrew/bin/tmux new-session -A
+command = /bin/zsh -l
 # command = /bin/zsh /usr/bin/ssh -t kfs@orb 'exec tmux new-session -A -s main'
 # command = /bin/zsh -lic 'exec ssh -t kfs@orb "exec tmux new-session -A -s main"'
 # Ghostty supplies its bundled terminfo to tmux via TERMINFO.

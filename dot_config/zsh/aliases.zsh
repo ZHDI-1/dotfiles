@@ -16,6 +16,35 @@ alias cdb=' cd ..'
 alias nvimc='nvim -S ~/.config/nvim/Session.vim'
 alias n='nvim'
 
+# Keep the tmux server independent of exports from the launching shell.
+# Pane shells load the current environment settings from their startup files.
+tmux() {
+  emulate -L zsh
+
+  local -a tmux_env
+  local tmux_var
+  tmux_env=(
+    'PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
+    'SHELL=/bin/zsh'
+  )
+
+  # Preserve connection context so commands inside panes target their server.
+  # Terminal capabilities and SSH forwarding must also survive the cleanup.
+  for tmux_var in \
+    HOME USER LOGNAME TMPDIR TMUX_TMPDIR ZDOTDIR XDG_CONFIG_HOME \
+    TERM TERMINFO TERMINFO_DIRS COLORTERM TERM_PROGRAM TERM_PROGRAM_VERSION \
+    LANG LC_ALL LC_COLLATE LC_CTYPE LC_MESSAGES LC_MONETARY LC_NUMERIC LC_TIME \
+    SSH_AUTH_SOCK SSH_AGENT_PID SSH_CONNECTION SSH_TTY DISPLAY XAUTHORITY \
+    TMUX TMUX_PANE; do
+    if (( ${+parameters[$tmux_var]} )); then
+      tmux_env+=("${tmux_var}=${(P)tmux_var}")
+    fi
+  done
+
+  /usr/bin/env -i "${tmux_env[@]}" tmux "$@"
+}
+
+
 c() {
   local codex_dir
   codex_dir="$(mktemp -d "${TMPDIR:-/tmp}/codex.XXXXXXXXXX")" || return

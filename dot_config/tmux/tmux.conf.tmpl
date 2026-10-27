@@ -30,6 +30,7 @@ set -g monitor-bell on
 set -g bell-action any
 set -g default-shell /bin/zsh
 set -g default-command "/bin/zsh -l"
+set -s theme terminal
 # Capabilities do not enable application modes by themselves.
 set -s extended-keys on
 set -s extended-keys-format csi-u
@@ -42,6 +43,7 @@ set -sg escape-time 0
 set -g default-terminal "tmux-256color"
 set -ag terminal-overrides ",xterm-256color:RGB"
 set -s input-buffer-size 8388608
+set -g history-limit 5000000
 
 set -s terminal-features[10] 'xterm-ghostty:256:RGB:bpaste:ccolour:clipboard:hyperlinks:cstyle:extkeys:focus:margins:osc7:overline:progressbar:strikethrough:sync:title:usstyle'
 set -s terminal-features[11] 'tmux-256color:256:RGB:bpaste:ccolour:clipboard:hyperlinks:cstyle:extkeys:focus:osc7:overline:progressbar:strikethrough:sync:title:usstyle'
@@ -56,6 +58,13 @@ set -g pane-border-status off
 set-hook -g window-layout-changed[10] 'set-option -wF pane-border-status "#{?#{||:#{==:#{window_panes},1},#{window_zoomed_flag}},off,top}"'
 set -g pane-border-format '#[align=right,fg=#{?pane_active,colour81,colour245},bg=default] #{pane_index}  #{pane_current_command}#{?#{==:#{pane_mode},copy-mode},#[fg=colour214] [COPY],}#[fg=colour245] · #{pane_current_path} #[default]'
 
+set -g allow-set-title on
+set -g @resurrect-capture-pane-contents 'on'
+set -g @resurrect-strategy-nvim 'session'
+set -g @continuum-restore 'off'
+
+
+set -g @plugin 'tmux-plugins/tpm'
 {{ if eq .tmuxRole "remote" }}
 set -g @trs-level pane
 set -g set-titles on
@@ -71,25 +80,19 @@ bind-key R set-option -F @trs-level '#{?#{==:#{@trs-level},pane},window,pane}'
 bind-key C-r if-shell -F '#{==:#{@trs-level},session}' 'set-option -F @trs-level "#{?#{==:#{@trs-return-level},window},window,pane}"' 'set-option -F @trs-return-level "#{@trs-level}" ; set-option @trs-level session'
 
 {{ else if eq .tmuxRole "client" }}
-set -g allow-set-title on
-set -g @resurrect-capture-pane-contents 'on'
-set -g @resurrect-strategy-nvim 'session'
-set -g @continuum-restore 'off'
 set -g @tmux-remote-sessions-vim-navigation on
 set -g @tmux-remote-sessions-preserve-current-path on
 
 set-environment -g PATH "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-
-set -g @plugin 'tmux-plugins/tpm'
 set -g @plugin 'git@github.com:ZHDI-1/tmux-remote-sessions.git'
+{{ else }}
+{{ fail "tmuxRole must be client or remote" }}
+{{ end }}
+
 set -g @plugin 'tmux-plugins/tmux-resurrect'
 set -g @plugin 'tmux-plugins/tmux-continuum'
 
 if-shell 'test -d "$HOME/.config/tmux/plugins/tpm"' \
   'run-shell "$HOME/.config/tmux/plugins/tpm/tpm > $HOME/.config/tmux/log"' \
   'run-shell "git clone https://github.com/tmux-plugins/tpm \"$HOME/.config/tmux/plugins/tpm\" && \"$HOME/.config/tmux/plugins/tpm/tpm\""'
-
-{{ else }}
-{{ fail "tmuxRole must be client or remote" }}
-{{ end }}

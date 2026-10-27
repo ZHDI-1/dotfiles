@@ -240,7 +240,7 @@ class SetupTests(unittest.TestCase):
             mock.patch.object(setup.shutil, "which", return_value="/usr/bin/sudo"),
         ):
             self.assertEqual(
-                setup.privileged_command(command), ["sudo", "-n", "--", *command]
+                setup.privileged_command(command), ["sudo", "--", *command]
             )
         with (
             mock.patch.object(setup.os, "geteuid", return_value=501),
@@ -265,7 +265,7 @@ class SetupTests(unittest.TestCase):
         setup.persist(old)
         state = setup.state_path(workspace).read_bytes()
         owner = setup.owner_path(old).read_bytes()
-        for command in ("mount", "resume", "refresh", "unmount"):
+        for command in ("mount", "resume", "refresh", "remount", "umount"):
             with (
                 self.subTest(command=command),
                 mock.patch.object(setup, "mount_records", return_value=[old["mounted"]]),
@@ -399,7 +399,7 @@ class SetupTests(unittest.TestCase):
             self.assertRaisesRegex(setup.SetupError, "busy"),
         ):
             setup.unmount(self.plan)
-        run.assert_called_once_with(["umount", "--", self.plan["merged"]], timeout=30)
+        run.assert_called_once_with(["umount", "--", self.plan["merged"]], timeout=None)
         self.assertEqual(self.plan["mounted"], record)
 
     def test_foreign_mount_never_unmounted(self):
@@ -465,6 +465,8 @@ class ResumeTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="overlay-resume-test-")
         self.addCleanup(temporary.cleanup)
+        # cd tests chdir this process; restore before the fixture is removed.
+        self.addCleanup(os.chdir, os.getcwd())
         self.base = Path(temporary.name)
         self.plan = fixture(self.base)
         self.workspace = Path(self.plan["workspace"])
@@ -506,10 +508,10 @@ class ResumeTests(unittest.TestCase):
         self.run = result
 
     def execute(self, command, **kwargs):
-        self.assertEqual(command[:3], ["sudo", "-n", "--"])
-        if command[3] == "mount":
+        self.assertEqual(command[:2], ["sudo", "--"])
+        if command[2] == "mount":
             self.records.append(self.record)
-        elif command[3] == "umount":
+        elif command[2] == "umount":
             self.records.clear()
         else:
             self.fail(f"unexpected command during resume: {command}")
@@ -531,14 +533,14 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(self.resume(), 0, self.output.getvalue())
         self.run.assert_called_once_with(
             [
-                "sudo", "-n", "--", "mount", "-t", "overlay", "overlay", "-o",
+                "sudo", "--", "mount", "-t", "overlay", "overlay", "-o",
                 (
                     f"lowerdir={self.plan['kernel']},upperdir={self.plan['upper']},"
                     f"workdir={self.plan['workdir']},nosuid,nodev"
                 ),
                 "--", self.plan["merged"],
             ],
-            timeout=30,
+            timeout=None,
         )
         saved = setup.load_state(self.workspace)
         self.assertEqual(saved["mounted"], self.record)
@@ -549,7 +551,7 @@ class ResumeTests(unittest.TestCase):
             (Path(self.plan["workdir"]) / "scratch").read_text(), "retained"
         )
         with contextlib.redirect_stdout(self.output):
-            self.assertEqual(setup.main(["unmount", str(self.workspace)]), 0)
+            self.assertEqual(setup.main(["umount", str(self.workspace)]), 0)
         self.assertEqual(self.records, [])
 
     def test_resume_does_not_need_original_generation_inputs(self):
@@ -645,7 +647,7 @@ class ResumeTests(unittest.TestCase):
     def test_mount_denied_before_attachment_preserves_files(self):
         self.run.side_effect = setup.SetupError("permission denied")
         self.assertEqual(self.resume(), 1)
-        self.assertIn("sudo -v", self.output.getvalue())
+        self.assertIn("mount privileges", self.output.getvalue())
         self.assertEqual(self.records, [])
         self.assertEqual(self.run.call_count, 1)
         self.assertEqual(self.generated_snapshot(), self.before)
@@ -654,7 +656,7 @@ class ResumeTests(unittest.TestCase):
     def test_failed_resume_cleans_up_new_mount(self):
         def fail_after_mount(command, **kwargs):
             self.execute(command, **kwargs)
-            if command[3] == "mount":
+            if command[2] == "mount":
                 raise setup.SetupError("mount failed after attaching")
 
         self.run.side_effect = fail_after_mount
@@ -663,6 +665,105 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(self.records, [])
         self.assertEqual(self.run.call_count, 2)
         self.assertEqual(self.generated_snapshot(), self.before)
+
+    def mount_current(self):
+        self.records.append(self.record)
+        self.plan["mounted"] = self.record
+        setup.persist(self.plan)
+
+    def remount(self):
+        with (
+            contextlib.redirect_stdout(self.output),
+            contextlib.redirect_stderr(self.output),
+        ):
+            return setup.main(["remount", str(self.workspace)])
+
+    def test_remount_unmounts_then_resumes(self):
+        self.mount_current()
+        self.assertEqual(self.remount(), 0, self.output.getvalue())
+        self.assertEqual(
+            [call.args[0][2] for call in self.run.call_args_list], ["umount", "mount"]
+        )
+        self.assertEqual(self.records, [self.record])
+        self.assertEqual(setup.load_state(self.workspace)["mounted"], self.record)
+        self.assertEqual(self.generated_snapshot(), self.before)
+
+    def test_remount_when_unmounted_only_mounts(self):
+        self.assertEqual(self.remount(), 0, self.output.getvalue())
+        self.assertEqual(
+            [call.args[0][2] for call in self.run.call_args_list], ["mount"]
+        )
+
+    def test_remount_checks_resume_before_unmounting(self):
+        self.mount_current()
+        self.database.unlink()
+        self.assertEqual(self.remount(), 1)
+        self.assertIn("use mount to regenerate", self.output.getvalue())
+        self.run.assert_not_called()
+        self.assertEqual(self.records, [self.record])
+
+    def test_busy_remount_keeps_current_mount(self):
+        self.mount_current()
+        self.run.side_effect = setup.SetupError("target is busy")
+        self.assertEqual(self.remount(), 1)
+        self.assertIn("target is busy", self.output.getvalue())
+        self.assertEqual(self.run.call_count, 1)  # umount only; no mount attempted
+        self.assertEqual(self.records, [self.record])
+        self.assertEqual(setup.load_state(self.workspace)["mounted"], self.record)
+
+    def test_remount_refuses_foreign_mount(self):
+        self.records.append(dict(self.record, id="999"))
+        self.assertEqual(self.remount(), 1)
+        self.assertIn("unrecognized existing mount", self.output.getvalue())
+        self.run.assert_not_called()
+
+    def cd(self, *args, shell="/bin/zsh"):
+        launched = []
+
+        def execvp(file, argv):  # Record instead of replacing the test runner.
+            launched.append((file, argv, os.getcwd()))
+
+        with (
+            mock.patch.object(setup.os, "execvp", side_effect=execvp),
+            mock.patch.dict(setup.os.environ),
+            contextlib.redirect_stdout(self.output),
+            contextlib.redirect_stderr(self.output),
+        ):
+            setup.os.environ.pop("SHELL", None)
+            if shell:
+                setup.os.environ["SHELL"] = shell
+            return setup.main(["cd", *args]), launched
+
+    def test_cd_starts_shell_in_upper(self):
+        self.assertEqual(
+            self.cd(str(self.workspace)),
+            (0, [("/bin/zsh", ["/bin/zsh"], self.plan["upper"])]),
+        )
+        self.assertNotIn("note:", self.output.getvalue())
+        self.run.assert_not_called()
+
+    def test_cd_without_shell_variable_uses_sh(self):
+        self.assertEqual(
+            self.cd(str(self.workspace), shell=None),
+            (0, [("/bin/sh", ["/bin/sh"], self.plan["upper"])]),
+        )
+
+    def test_cd_finds_workspace_from_current_directory(self):
+        nested = self.workspace / "merged/fs/ceph"
+        nested.mkdir(parents=True)
+        for directory in (self.workspace, nested):
+            with self.subTest(directory=directory):
+                os.chdir(directory)
+                self.assertEqual(
+                    self.cd(), (0, [("/bin/zsh", ["/bin/zsh"], self.plan["upper"])])
+                )
+        # Started from merged/, the waiting caller keeps the mount busy.
+        self.assertIn("calling shell stays in merged/", self.output.getvalue())
+
+    def test_cd_outside_workspace_requires_argument(self):
+        os.chdir(self.base)
+        self.assertEqual(self.cd(), (1, []))
+        self.assertIn("pass WORKSPACE", self.output.getvalue())
 
 
 @unittest.skipUnless(
@@ -745,7 +846,7 @@ class RealOverlayTests(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             subprocess.run(
-                [sys.executable, str(SCRIPT), "unmount", str(workspace)],
+                [sys.executable, str(SCRIPT), "umount", str(workspace)],
                 check=True,
                 timeout=30,
             )
@@ -774,8 +875,26 @@ class RealOverlayTests(unittest.TestCase):
                 )
                 self.assertEqual(clangd.stat().st_mtime_ns, clangd_stat.st_mtime_ns)
                 self.assertEqual(sorted((workspace / "backups").iterdir()), backups)
+            # Replace an upper file behind the live mount, as git checkout does
+            # (unlink + create). The cached view may keep the old inode; only
+            # remount is guaranteed to show the new file.
+            self.assertEqual(
+                (merged / "fs/ceph/inode.c").read_text(), "company edited\n"
+            )
+            (upper / "fs/ceph/inode.c").unlink()
+            write(upper / "fs/ceph/inode.c", "company checkout\n")
             subprocess.run(
-                [sys.executable, str(SCRIPT), "unmount", str(workspace)],
+                [sys.executable, str(SCRIPT), "remount", str(workspace)],
+                check=True,
+                timeout=30,
+            )
+            self.assertTrue(os.path.ismount(merged))
+            self.assertTrue(setup.is_ours(setup.mount_at(merged), setup.load_state(workspace)))
+            self.assertEqual(
+                (merged / "fs/ceph/inode.c").read_text(), "company checkout\n"
+            )
+            subprocess.run(
+                [sys.executable, str(SCRIPT), "umount", str(workspace)],
                 check=True,
                 timeout=30,
             )

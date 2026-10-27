@@ -34,7 +34,10 @@ read-only to other processes.
 
 Do not build in the merged tree: company module Makefiles replace some kernel
 Makefiles. Do not modify either backing tree behind the mounted filesystem;
-unmount before company builds, checkout/reset/pull, or updating Linux. Git's
+unmount before company builds, checkout/reset/pull, or updating Linux. If one
+changed while mounted anyway, run `remount`: OverlayFS keeps serving files it
+looked up before the change (Git replaces files on checkout, so `merged/` can
+keep showing the deleted old version) until it is mounted again. Git's
 kernel `.git` may be visible inside the mount: use the real company repository
 for Git inspection, and **do not run Git-changing operations in the merged tree**.
 Deletion uses overlay whiteout metadata, not simply a portable Git deletion.
@@ -54,11 +57,11 @@ The actual mount is the final compatibility check; dry-run does not probe it.
 Setup rejects a read-only fallback even when `mount` exits successfully and
 unmounts that newly created view before attempting generation/resume.
 
-Run the script as your normal user. **Only `mount` and `umount` use `sudo -n`**;
-database generation, backups, and state writes stay unprivileged. If your sudo
-policy requires authentication, run `sudo -v` first. There is no password prompt
-inside setup, no FUSE fallback, package installation, or kernel build. Native
-mounts use `nosuid,nodev`. Do not run the whole script with sudo.
+Run the script as your normal user. **Only `mount` and `umount` run through
+`sudo`**, which may prompt for your password on the terminal; database
+generation, backups, and state writes stay unprivileged. There is no FUSE
+fallback, package installation, or kernel build. Native mounts use
+`nosuid,nodev`. Do not run the whole script with sudo.
 
 First inspect the input database:
 
@@ -122,8 +125,22 @@ setup-ceph-kernel-workspace.py resume WORKSPACE --dry-run
 setup-ceph-kernel-workspace.py resume WORKSPACE
 setup-ceph-kernel-workspace.py refresh WORKSPACE --dry-run
 setup-ceph-kernel-workspace.py refresh WORKSPACE
-setup-ceph-kernel-workspace.py unmount WORKSPACE
+setup-ceph-kernel-workspace.py remount WORKSPACE
+setup-ceph-kernel-workspace.py umount WORKSPACE
+setup-ceph-kernel-workspace.py cd [WORKSPACE]
 ```
+
+`remount` is `umount` followed by `resume`, for when a backing tree changed
+while mounted (for example a `git checkout` in company `src`). It checks that
+resume can succeed before unmounting, and a busy unmount leaves the current
+view mounted.
+
+`cd` starts `$SHELL` (default `/bin/sh`) in company `src` (the upper), like
+`chezmoi cd`; exit it (Ctrl-D) to return to where you started. Without
+`WORKSPACE` it uses the workspace at or above the current directory, including
+from inside `merged/`. Started from inside `merged/`, the waiting outer shell
+keeps the mount busy, so `umount`/`remount` from the inner shell fail until you
+exit it or start `cd` from outside `merged/`.
 
 After reboot or an ordinary unmount, use `resume WORKSPACE` to restore the
 recorded layers and workdir. It leaves company `src/compile_commands.json` and
@@ -141,7 +158,8 @@ database is missing, use `mount` to regenerate it.
 `refresh` requires an active matching mount and reuses saved options. Repeating
 `mount` with matching layers also refreshes the database; provide any desired
 non-default options again. Layer changes require a separate workspace.
-Close buffers/processes using the mount before unmounting. A busy unmount fails
+Close buffers/processes using the mount before unmounting (`fuser -vm
+WORKSPACE/merged` lists them, including shells sitting in it). A busy unmount fails
 normally; the script never uses lazy/forced unmounts or deletes source files.
 
 ## Existing FUSE workspaces
@@ -219,7 +237,7 @@ The original input is unchanged unless it is explicitly also the output.
 - Generated files and backups already written are retained after failures;
   cleanup is not a transaction that rolls back company edits.
 - A process crash or power loss can leave a mount/state for explicit recovery.
-  Use `status` and `unmount`; never recursively remove a mounted directory.
+  Use `status` and `umount`; never recursively remove a mounted directory.
 
 ## Tests
 
@@ -228,7 +246,7 @@ python3 -m unittest discover \
   -s ~/.local/share/ceph-kernel-workspace/tests -v
 
 # Adds a real native mount/unmount test using disposable fixtures only.
-# Run sudo -v first if required by your sudo policy.
+# Run sudo -v first if required: test timeouts also cover sudo prompts.
 RUN_OVERLAY_TESTS=1 python3 -m unittest discover \
   -s ~/.local/share/ceph-kernel-workspace/tests -v
 

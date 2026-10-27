@@ -65,8 +65,29 @@ _codexside() {
   )
 }
 
-alias codexside='_codexside'
+_piside() {
+  local pi_dir
+  pi_dir="$(mktemp -d "${TMPDIR:-/tmp}/piside.XXXXXXXXXX")" || return
+
+  (
+    cd "$pi_dir" || exit
+    command pi "$@"
+  )
+}
+
+_claudeside() {
+  local claude_dir
+  claude_dir="$(mktemp -d "${TMPDIR:-/tmp}/claudeside.XXXXXXXXXX")" || return
+
+  (
+    cd "$claude_dir" || exit
+    command claude "$@"
+  )
+}
+
 alias codexs='_codexside'
+alias claudes='_claudeside'
+alias pis='_piside'
 
 # Keep cat on the system binary while syspolicyd/Homebrew exec checks are unstable.
 # alias cat='bat'

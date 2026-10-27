@@ -246,19 +246,19 @@ def privileged_command(command):
         return command
     if not shutil.which("sudo"):
         raise SetupError("sudo is required for native mount/umount operations")
-    # Never block on an invisible password prompt (including failure cleanup).
-    # Authenticate with sudo -v beforehand if the machine requires a password.
-    return ["sudo", "-n", "--", *command]
+    # sudo may prompt on the terminal; its own passwd_timeout bounds that wait.
+    return ["sudo", "--", *command]
 
 
 def run_privileged(command):
     try:
-        run(privileged_command(command), timeout=30)
+        # No timeout here: it would also cut off someone typing the password.
+        run(privileged_command(command), timeout=None)
     except SetupError as exc:
         raise SetupError(
             f"{exc}; native OverlayFS needs mount privileges and a compatible "
-            "upper/workdir filesystem. If sudo authorization expired, run sudo -v "
-            "and retry as your normal user (do not sudo the whole script)"
+            "upper/workdir filesystem. Run as your normal user; only mount/umount "
+            "are sudo'd (do not sudo the whole script)"
         ) from exc
 
 
@@ -443,6 +443,40 @@ def unmount(plan):
     )
 
 
+def remount(plan):
+    # OverlayFS keeps lookups cached from before a backing tree changed (git
+    # replaces files on checkout), so only a fresh mount shows the new files.
+    # Check that resume can succeed before dropping the current view.
+    validate(plan, plan, resume=True)
+    with setup_lock(plan):
+        unmount(plan)
+    # setup() takes the lock itself and revalidates, so a racing operation fails.
+    setup(plan, resume=True)
+
+
+def find_workspace(start):
+    for path in (start, *start.parents):
+        if os.path.lexists(state_path(path)):
+            return path
+    raise SetupError(f"no workspace state at or above {start}; pass WORKSPACE")
+
+
+def shell_in_upper(plan):
+    merged = Path(plan["merged"])
+    cwd = Path.cwd()
+    if cwd == merged or merged in cwd.parents:
+        print(
+            "note: the calling shell stays in merged/, so umount/remount are busy "
+            "until you exit this shell (Ctrl-D)",
+            file=sys.stderr,
+        )
+    shell = os.environ.get("SHELL") or "/bin/sh"
+    # Like chezmoi cd: a child cannot move the caller's directory, so become a
+    # shell in the upper instead; exiting it returns to where the caller was.
+    os.chdir(plan["upper"])
+    os.execvp(shell, [shell])
+
+
 def setup(plan, dry_run=False, refresh=False, *, resume=False):
     workspace = Path(plan["workspace"])
     previous = load_state(workspace, required=resume)
@@ -508,7 +542,7 @@ def setup(plan, dry_run=False, refresh=False, *, resume=False):
                     unmount(plan)
                 except (SetupError, OSError, subprocess.TimeoutExpired) as exc:
                     print(
-                        f"cleanup failed: {exc}; use the unmount command",
+                        f"cleanup failed: {exc}; use the umount command",
                         file=sys.stderr,
                     )
             raise
@@ -522,7 +556,8 @@ def setup(plan, dry_run=False, refresh=False, *, resume=False):
             "The output database is company src/compile_commands.json; backups are in workspace/backups."
         )
     print(
-        "Edit through merged/, do not build there, and unmount before changing backing trees."
+        "Edit through merged/, do not build there, and umount before changing backing "
+        "trees (remount if one changed while mounted)."
     )
     print(
         "Do not run Git-changing commands in merged/: Linux's .git may be visible there."
@@ -611,24 +646,45 @@ def main(argv=None):
     for name, help_text in (
         ("resume", "restore a saved mount without regenerating the database or .clangd"),
         ("refresh", "regenerate the database for an existing mount"),
-        ("unmount", "unmount without deleting edits or state"),
+        (
+            "remount",
+            "umount then resume, so changes made in a backing tree while mounted show up",
+        ),
+        ("umount", "unmount without deleting edits or state"),
         ("status", "show recorded layers and current mount identity"),
     ):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("workspace")
         if name in ("resume", "refresh"):
             command.add_argument("--dry-run", action="store_true")
+    cd = commands.add_parser(
+        "cd",
+        help="start $SHELL in the company upper directory; exit it (Ctrl-D) to return",
+    )
+    cd.add_argument(
+        "workspace",
+        nargs="?",
+        help="default: the workspace at or above the current directory",
+    )
     args = parser.parse_args(argv)
     try:
         if args.command == "mount":
             setup(make_plan(args), args.dry_run)
         else:
-            plan = load_state(absolute(args.workspace))
-            if args.command == "resume":
+            if args.workspace is None:
+                workspace = find_workspace(Path.cwd())
+            else:
+                workspace = absolute(args.workspace)
+            plan = load_state(workspace)
+            if args.command == "cd":
+                shell_in_upper(plan)
+            elif args.command == "resume":
                 setup(plan, args.dry_run, resume=True)
             elif args.command == "refresh":
                 setup(plan, args.dry_run, refresh=True)
-            elif args.command == "unmount":
+            elif args.command == "remount":
+                remount(plan)
+            elif args.command == "umount":
                 require_native(plan)  # Refuse legacy state before even creating a lock.
                 with setup_lock(plan):
                     unmount(plan)

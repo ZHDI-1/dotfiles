@@ -1,36 +1,98 @@
 {
   "env": {},
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
   "model": "opus",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/statusline-state.sh Ready"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/statusline-state.sh Thinking"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/statusline-state.sh Working"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/statusline-state.sh Thinking"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/statusline-state.sh Thinking"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/statusline-state.sh Ready"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/statusline-state.sh Ready"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/statusline-state.sh clear"
+          }
+        ]
+      }
+    ]
+  },
   "statusLine": {
     "type": "command",
     "command": "bash ~/.claude/statusline-command.sh",
     "refreshInterval": 1
-  },
-  "hooks": {
-    "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "bash ~/.claude/statusline-state.sh Ready" }] }
-    ],
-    "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "bash ~/.claude/statusline-state.sh Thinking" }] }
-    ],
-    "PreToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "bash ~/.claude/statusline-state.sh Working" }] }
-    ],
-    "PostToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "bash ~/.claude/statusline-state.sh Thinking" }] }
-    ],
-    "PostToolUseFailure": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "bash ~/.claude/statusline-state.sh Thinking" }] }
-    ],
-    "Stop": [
-      { "hooks": [{ "type": "command", "command": "bash ~/.claude/statusline-state.sh Ready" }] }
-    ],
-    "StopFailure": [
-      { "hooks": [{ "type": "command", "command": "bash ~/.claude/statusline-state.sh Ready" }] }
-    ],
-    "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "bash ~/.claude/statusline-state.sh clear" }] }
-    ]
   },
   "enabledPlugins": {
     "clangd-lsp@claude-plugins-official": true
@@ -41,12 +103,9 @@
       "effortLevel": "xhigh"
     }
   },
-  "autoUpdatesChannel": "latest",
-  "skipDangerousModePermissionPrompt": true,
-  "theme": "auto",
-  "permissions": {
-    "defaultMode": "bypassPermissions"
-  },
   "fastMode": true,
-  "tui": "default"
+  "autoUpdatesChannel": "latest",
+  "tui": "fullscreen",
+  "skipDangerousModePermissionPrompt": true,
+  "theme": "auto"
 }

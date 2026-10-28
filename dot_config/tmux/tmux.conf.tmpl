@@ -43,7 +43,7 @@ set -sg escape-time 0
 set -g default-terminal "tmux-256color"
 set -ag terminal-overrides ",xterm-256color:RGB"
 set -s input-buffer-size 8388608
-set -g history-limit 5000000
+set -g history-limit 2147483647
 
 set -s terminal-features[10] 'xterm-ghostty:256:RGB:bpaste:ccolour:clipboard:hyperlinks:cstyle:extkeys:focus:margins:osc7:overline:progressbar:strikethrough:sync:title:usstyle'
 set -s terminal-features[11] 'tmux-256color:256:RGB:bpaste:ccolour:clipboard:hyperlinks:cstyle:extkeys:focus:osc7:overline:progressbar:strikethrough:sync:title:usstyle'

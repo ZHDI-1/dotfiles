@@ -100,6 +100,17 @@ set -g @plugin 'git@github.com:ZHDI-1/tmux-remote-sessions.git'
 {{ fail "tmuxRole must be client or remote" }}
 {{ end }}
 
+# install_plugins needs this before tpm has run; same path tpm would pick.
+set-environment -g TMUX_PLUGIN_MANAGER_PATH "$HOME/.config/tmux/plugins/"
+
+# TPM's git calls go through zsh -c so they get the proxy from ~/.zshenv; the
+# server may start with a bare env (e.g. over ssh), and run-shell always uses sh.
+# Install missing plugins, then source them; startup progress goes to the log.
 if-shell 'test -d "$HOME/.config/tmux/plugins/tpm"' \
-  'run-shell "$HOME/.config/tmux/plugins/tpm/tpm > $HOME/.config/tmux/log"' \
-  'run-shell "git clone https://github.com/tmux-plugins/tpm \"$HOME/.config/tmux/plugins/tpm\" && \"$HOME/.config/tmux/plugins/tpm/tpm\""'
+  'run-shell "zsh -c \"{ $HOME/.config/tmux/plugins/tpm/bin/install_plugins; $HOME/.config/tmux/plugins/tpm/tpm; } > $HOME/.config/tmux/log 2>&1\""' \
+  'run-shell "zsh -c \"{ git clone https://github.com/tmux-plugins/tpm $HOME/.config/tmux/plugins/tpm || exit; $HOME/.config/tmux/plugins/tpm/bin/install_plugins; $HOME/.config/tmux/plugins/tpm/tpm; } > $HOME/.config/tmux/log 2>&1\""'
+
+# Override tpm's I/U bindings the same way. U skips TPM's installed-plugins list:
+# its prompt starts a fresh sh job that can't be wrapped from outside.
+bind-key I run-shell "zsh -c $HOME/.config/tmux/plugins/tpm/bindings/install_plugins"
+bind-key U command-prompt -p 'plugin update:' "run-shell 'zsh -c \"$HOME/.config/tmux/plugins/tpm/scripts/update_plugin_prompt_handler.sh %1\"'"

@@ -63,8 +63,18 @@ set -g @resurrect-capture-pane-contents 'on'
 set -g @resurrect-strategy-nvim 'session'
 set -g @continuum-restore 'off'
 
+set -g @plugin 'tmux-plugins/tmux-resurrect'
+set -g @plugin 'tmux-plugins/tmux-continuum'
+
+
 
 set -g @plugin 'tmux-plugins/tpm'
+
+# Soft warnings use the status line; hard warnings open a popup.
+set -g @memwatch-soft-limit '2GiB'
+set -g @memwatch-hard-limit '8GiB'
+set -g @plugin 'ZHDI-1/tmux-memwatch'
+
 {{ if eq .tmuxRole "remote" }}
 set -g @trs-level pane
 set -g set-titles on
@@ -89,9 +99,6 @@ set -g @plugin 'git@github.com:ZHDI-1/tmux-remote-sessions.git'
 {{ else }}
 {{ fail "tmuxRole must be client or remote" }}
 {{ end }}
-
-set -g @plugin 'tmux-plugins/tmux-resurrect'
-set -g @plugin 'tmux-plugins/tmux-continuum'
 
 if-shell 'test -d "$HOME/.config/tmux/plugins/tpm"' \
   'run-shell "$HOME/.config/tmux/plugins/tpm/tpm > $HOME/.config/tmux/log"' \

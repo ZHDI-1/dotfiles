@@ -1,0 +1,4 @@
+interface:
+  display_name: "技术问题分析文档"
+  short_description: "新写、重构或评审中文技术问题分析文档，控制结论强度与证据边界"
+  default_prompt: "使用 $tech-issue-analysis-docs 处理这份技术问题分析材料：按需新写、重构或评审，使结论强度与证据相称。"

@@ -42,15 +42,6 @@ Include ~/.orbstack/ssh/config
 
 {{ end -}}
 
-Host *
-  ServerAliveInterval 60
-  TCPKeepAlive yes
-  ServerAliveCountMax 3
-
-  ControlMaster auto
-  ControlPath ~/.ssh/sockets/%r@%h-%p
-  ControlPersist 5m
-
 # Host *.corp.kuaishou.com
 #     ProxyCommand nc -X 5 -x 127.0.0.1:1080 %h %p
 
@@ -151,7 +142,17 @@ Host gitlab.com
   IdentityFile ~/.ssh/id_ed25519_git
   IdentityFile ~/.ssh/id_ed25519
 
-{{ if eq .chezmoi.os "darwin" -}}
+# Defaults for every host. ssh keeps the first value it sees for each option,
+# so this block must stay last or it overrides the host blocks above.
 Host *
-	IdentityAgent {{ joinPath .chezmoi.homeDir "Library" "Containers" "com.kuaishou.it.secpass.SecretAgent" "Data" "socket.ssh" }}
-{{ end -}}
+  ServerAliveInterval 60
+  TCPKeepAlive yes
+  ServerAliveCountMax 3
+
+  ControlMaster auto
+  ControlPath ~/.ssh/sockets/%r@%h-%p
+  ControlPersist 5m
+{{- if eq .chezmoi.os "darwin" }}
+
+  IdentityAgent {{ joinPath .chezmoi.homeDir "Library" "Containers" "com.kuaishou.it.secpass.SecretAgent" "Data" "socket.ssh" }}
+{{- end }}

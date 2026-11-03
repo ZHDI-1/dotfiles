@@ -93,7 +93,7 @@ bind-key C-r if-shell -F '#{==:#{@trs-level},session}' 'set-option -F @trs-level
 set -g @tmux-remote-sessions-vim-navigation on
 set -g @tmux-remote-sessions-preserve-current-path on
 
-set-environment -g PATH "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+set-environment -g PATH "{{ if eq .chezmoi.os "darwin" }}/opt/homebrew/bin:{{ end }}/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 set -g @plugin 'git@github.com:ZHDI-1/tmux-remote-sessions.git'
 {{ else }}

@@ -21,10 +21,13 @@ alias n='nvim'
 tmux() {
   emulate -L zsh
 
-  local -a tmux_env
+  local -a tmux_env tmux_path
   local tmux_var
+  # Keep only the system dirs this host has (no /opt/homebrew/bin on Linux).
+  tmux_path=(/opt/homebrew/bin /usr/local/bin /usr/bin /bin /usr/sbin /sbin)
+  tmux_path=(${^tmux_path}(N-/))
   tmux_env=(
-    'PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
+    "PATH=${(j.:.)tmux_path}"
     'SHELL=/bin/zsh'
   )
 

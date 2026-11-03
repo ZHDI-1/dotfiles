@@ -1,0 +1,278 @@
+#!/usr/bin/env zsh
+# s3cp / s3ls: copy and list objects on the KFS BlobStore S3 endpoint.
+#
+# One script, two commands: ~/.local/bin/s3ls is a symlink to this file and the
+# command is picked from the name it runs as. Transfers and listings use the aws
+# CLI. `s3cp __complete WORD` prints completion candidates for
+# ~/.config/zsh/completions/_s3cp using curl, because the aws CLI spends ~0.4 s
+# starting Python on every Tab (~0.6 s per listing vs ~40 ms with curl).
+#
+# Settings come from the environment. Export them to override; a plain shell
+# variable does not reach a script.
+#   S3_ENDPOINT_URL    endpoint (default: the corp one below; IDC hosts export
+#                      their own, e.g. from ~/.zshenv)
+#   S3_COMMON_FLAGS    extra aws flags, word-split (default: --no-sign-request)
+#   DEFAULT_S3_BUCKET  bucket for shorthand keys (default: infra-kfs)
+
+emulate -R zsh
+setopt extended_glob pipe_fail
+
+: ${S3_ENDPOINT_URL:=http://bs3-hb1.corp.kuaishou.com}
+: ${S3_COMMON_FLAGS:=--no-sign-request}
+: ${DEFAULT_S3_BUCKET:=infra-kfs}
+
+s3_resolve_path() {
+  local s3_path=$1
+
+  if [[ $s3_path == s3://* ]]; then
+    REPLY=$s3_path
+  else
+    REPLY="s3://${DEFAULT_S3_BUCKET}/${s3_path#/}"
+  fi
+}
+
+s3_aws() {
+  if (( ! $+commands[aws] )); then
+    print -u2 "Error: 'aws' CLI not found. Please install it."
+    return 1
+  fi
+
+  local -a cmd=(aws)
+  [[ -n $S3_ENDPOINT_URL ]] && cmd+=(--endpoint-url "$S3_ENDPOINT_URL")
+  [[ -n $S3_COMMON_FLAGS ]] && cmd+=("${(z)S3_COMMON_FLAGS}")
+  "${cmd[@]}" "$@"
+}
+
+usage_s3ls() {
+  cat >&2 <<'EOF_USAGE'
+Usage: s3ls [-h|--human-readable] [s3_key_or_path]
+
+List the default bucket, a shorthand key in that bucket, or an s3:// URI.
+  -h, --human-readable  Display sizes in human-readable units.
+      --help            Show this help text.
+EOF_USAGE
+}
+
+cmd_s3ls() {
+  local human_readable=0 s3_path_arg= s3_path
+  local -a ls_args
+
+  while (( $# > 0 )); do
+    case $1 in
+      (-h|--human-readable)
+        human_readable=1
+        ;;
+      (--help)
+        usage_s3ls
+        return 0
+        ;;
+      (--)
+        shift
+        if [[ -n $s3_path_arg ]] || (( $# > 1 )); then
+          usage_s3ls
+          return 1
+        fi
+        s3_path_arg=${1-}
+        break
+        ;;
+      (-*)
+        print -u2 -r -- "Error: Unknown s3ls option: $1"
+        usage_s3ls
+        return 1
+        ;;
+      (*)
+        if [[ -n $s3_path_arg ]]; then
+          usage_s3ls
+          return 1
+        fi
+        s3_path_arg=$1
+        ;;
+    esac
+    shift
+  done
+
+  if [[ -z $s3_path_arg ]]; then
+    s3_path="s3://${DEFAULT_S3_BUCKET}/"
+  else
+    s3_resolve_path "$s3_path_arg"
+    s3_path=$REPLY
+  fi
+
+  print -u2 -r -- "Listing: $s3_path..."
+  ls_args=(ls "$s3_path")
+  (( human_readable )) && ls_args+=(--human-readable)
+  s3_aws s3 "${ls_args[@]}" || {
+    print -u2 -r -- "Error: Failed to list '$s3_path'"
+    return 1
+  }
+}
+
+usage_s3cp() {
+  cat >&2 <<'EOF_USAGE'
+Usage: s3cp <source> <destination>
+
+Copy a file between the local filesystem and S3, or between two s3:// URIs.
+Shorthand S3 keys use DEFAULT_S3_BUCKET. When neither path is an s3:// URI,
+a local-looking destination such as ./ selects a download; otherwise an
+existing source is uploaded and a missing source is downloaded. Use an explicit
+s3:// URI to resolve an ambiguous local/remote filename.
+
+Examples:
+  s3cp ./file.txt my-key.txt
+  s3cp my-key.txt ./
+  s3cp ./file.txt s3://other-bucket/my-key.txt
+  s3cp s3://other-bucket/my-key.txt ./
+EOF_USAGE
+}
+
+cmd_s3cp() {
+  if [[ ${1-} == --help ]]; then
+    usage_s3cp
+    return 0
+  fi
+  [[ ${1-} == -- ]] && shift
+  if (( $# != 2 )); then
+    usage_s3cp
+    return 1
+  fi
+
+  local source=$1 destination=$2
+  local resolved_source=$source resolved_destination=$destination
+  local operation
+
+  if [[ $source == s3://* && $destination == s3://* ]]; then
+    operation=copy
+  elif [[ $source == s3://* ]]; then
+    operation=download
+  elif [[ $destination == s3://* ]]; then
+    operation=upload
+  elif [[ $destination == (.|..|/*|./*|../*) ]]; then
+    # A local-looking destination means the source is a shorthand S3 key.
+    operation=download
+    s3_resolve_path "$source"
+    resolved_source=$REPLY
+  elif [[ -e $source || -L $source ]]; then
+    operation=upload
+    s3_resolve_path "$destination"
+    resolved_destination=$REPLY
+  else
+    operation=download
+    s3_resolve_path "$source"
+    resolved_source=$REPLY
+  fi
+
+  if [[ $operation == upload && ! -f $source ]]; then
+    print -u2 -r -- "Error: Local file not found or not a regular file: $source"
+    return 1
+  fi
+
+  case $operation in
+    (upload) print -u2 -r -- "Uploading: $resolved_source -> $resolved_destination..." ;;
+    (download) print -u2 -r -- "Downloading: $resolved_source -> $resolved_destination..." ;;
+    (*) print -u2 -r -- "Copying: $resolved_source -> $resolved_destination..." ;;
+  esac
+  s3_aws s3 cp "$resolved_source" "$resolved_destination" || {
+    print -u2 -r -- "Error: Failed to copy '$resolved_source' to '$resolved_destination'"
+    return 1
+  }
+}
+
+# --- Completion: curl only, never the aws CLI. ---------------------------------
+
+# Decode like botocore's unquote_plus: '+' is a space, %XX is a byte.
+s3_url_decode() {
+  REPLY=${1//+/ }
+  [[ $REPLY == *%* ]] || return 0
+  REPLY=${REPLY//\\/\\\\}
+  REPLY=${REPLY//(#b)%([[:xdigit:]](#c2))/\\x${match[1]}}
+  REPLY=${(g::)REPLY}
+}
+
+# GET with short timeouts so a dead endpoint cannot hang the shell.
+s3_get() {
+  (( $+commands[curl] )) || return 1
+  command curl --silent --fail --connect-timeout 2 --max-time 5 "$@" 2>/dev/null
+}
+
+# Print the keys and sub-"directories" directly under PREFIX in BUCKET, at most
+# 200. encoding-type=url keeps keys out of XML escaping; this server returns raw
+# keys without it, even though the response claims url encoding.
+s3_list_objects() {
+  local bucket=$1 prefix=$2 xml part
+  integer in_common_prefixes=0
+
+  xml=$(s3_get --get "${S3_ENDPOINT_URL%/}/${bucket}" \
+    --data-urlencode list-type=2 \
+    --data-urlencode "prefix=${prefix}" \
+    --data-urlencode delimiter=/ \
+    --data-urlencode max-keys=200 \
+    --data-urlencode encoding-type=url) || return
+
+  # Split on '<' so each element is "Tag>text". The top-level <Prefix> echoes the
+  # request, so only a <Prefix> inside <CommonPrefixes> is a candidate.
+  for part in "${(@s:<:)xml}"; do
+    case $part in
+      ('CommonPrefixes>'*) in_common_prefixes=1 ;;
+      ('/CommonPrefixes>'*) in_common_prefixes=0 ;;
+      ('Key>'*)
+        s3_url_decode "${part#Key>}"
+        print -r -- "$REPLY"
+        ;;
+      ('Prefix>'*)
+        if (( in_common_prefixes )); then
+          s3_url_decode "${part#Prefix>}"
+          print -r -- "$REPLY"
+        fi
+        ;;
+    esac
+  done
+}
+
+# Bucket names from ListBuckets. Unsigned endpoints may answer with something
+# that is not a bucket list; that simply yields no names.
+s3_list_buckets() {
+  local xml part
+  xml=$(s3_get "${S3_ENDPOINT_URL%/}/") || return
+  for part in "${(@s:<:)xml}"; do
+    [[ $part == 'Name>'* ]] && print -r -- "${part#Name>}"
+  done
+}
+
+cmd_complete() {
+  local typed=${1-} rest bucket key display= name
+
+  if [[ $typed == s3://* ]]; then
+    rest=${typed#s3://}
+    if [[ $rest != */* ]]; then
+      [[ $DEFAULT_S3_BUCKET == "$rest"* ]] && print -r -- "s3://${DEFAULT_S3_BUCKET}/"
+      for name in ${(f)"$(s3_list_buckets)"}; do
+        [[ $name == "$rest"* && $name != "$DEFAULT_S3_BUCKET" ]] && print -r -- "s3://${name}/"
+      done
+      return 0
+    fi
+    bucket=${rest%%/*}
+    key=${rest#*/}
+    display="s3://${bucket}/"
+  else
+    bucket=$DEFAULT_S3_BUCKET
+    key=${typed#/}
+    [[ $typed == /* ]] && display=/
+  fi
+
+  for name in ${(f)"$(s3_list_objects "$bucket" "$key")"}; do
+    print -r -- "${display}${name}"
+  done
+}
+
+case ${1-} in
+  (__complete)
+    shift
+    cmd_complete "$@"
+    ;;
+  (*)
+    case ${0:t} in
+      (s3ls) cmd_s3ls "$@" ;;
+      (*) cmd_s3cp "$@" ;;
+    esac
+    ;;
+esac

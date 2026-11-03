@@ -3,7 +3,12 @@
 - `env.zsh`: login/session environment and PATH
 - `plugins.zsh`: prompt and zinit-managed plugins
 - `interactive.zsh`: history, completion, keybindings, shell UX
-- `aliases.zsh`: aliases and shell functions
+- `aliases.zsh`: aliases and small functions that must run in the shell
+- `completions/`: autoloaded `_command` completion functions (on `fpath`)
+
+Standalone commands live in `~/.local/bin` (`dot_local/bin/` here), not as
+shell functions: they work from any shell, script, or tool, and cost nothing at
+startup. For example `s3cp`/`s3ls` and `git-bare`.
 
 Host-only files are optional, explicitly ignored by chezmoi, and never created
 or populated by the shared configuration:

@@ -1,0 +1,68 @@
+#compdef s3cp s3ls
+# Completion for ~/.local/bin/s3cp and its s3ls symlink. Remote candidates come
+# from `s3cp __complete WORD`, a single curl listing of the typed prefix.
+
+(( $+functions[_s3cp_remote] )) ||
+_s3cp_remote() {
+  # _approximate re-runs completion with typo patterns in PREFIX. The listing is
+  # an exact server-side prefix match on the typed word, so a retry would only
+  # repeat the same request; local _files still gets the typo correction.
+  (( $+_comp_correct )) && return 1
+
+  local -a candidates
+  candidates=(${(f)"$(command s3cp __complete "${words[CURRENT]}" 2>/dev/null)"})
+  (( $#candidates )) && compadd -S '' -- "${candidates[@]}"
+}
+
+local current=${words[CURRENT]} word source=
+integer i operand_count=0 options_ended=0 ret=1
+
+for (( i = 2; i < CURRENT; i++ )); do
+  word=${words[i]}
+  if (( ! options_ended )) && [[ $word == -- ]]; then
+    options_ended=1
+  elif (( ! options_ended )) && [[ $service == s3ls && $word == (-h|--human-readable|--help) ]]; then
+    :
+  elif (( ! options_ended )) && [[ $service == s3cp && $word == --help ]]; then
+    :
+  else
+    (( operand_count++ ))
+    (( operand_count == 1 )) && source=$word
+  fi
+done
+
+if [[ $service == s3ls ]]; then
+  if (( ! options_ended )) && [[ $current == -* ]]; then
+    compadd -S '' -- -h --human-readable --help && ret=0
+  elif (( operand_count == 0 )); then
+    _s3cp_remote && ret=0
+  fi
+  return ret
+fi
+
+# s3cp: the first operand may be local or remote; the second is the other side.
+# Return success if any branch added matches, so _approximate does not run.
+if (( ! options_ended )) && [[ $current == -* ]]; then
+  compadd -S '' -- --help && ret=0
+elif (( operand_count == 0 )); then
+  if [[ $current == s3://* ]]; then
+    _s3cp_remote && ret=0
+  else
+    _files && ret=0
+    if [[ $current != (/|./|../)* ]]; then
+      _s3cp_remote && ret=0
+    fi
+  fi
+elif (( operand_count == 1 )); then
+  if [[ $current == s3://* ]]; then
+    _s3cp_remote && ret=0
+  elif [[ $source == s3://* ]]; then
+    _files && ret=0
+  elif [[ -e $source || -L $source ]]; then
+    _s3cp_remote && ret=0
+  else
+    _files && ret=0
+  fi
+fi
+
+return ret

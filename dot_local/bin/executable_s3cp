@@ -109,9 +109,12 @@ cmd_s3ls() {
 
 usage_s3cp() {
   cat >&2 <<'EOF_USAGE'
-Usage: s3cp <source> <destination>
+Usage: s3cp [-r|--recursive] <source> <destination>
 
 Copy a file between the local filesystem and S3, or between two s3:// URIs.
+  -r, --recursive  Copy a directory or S3 prefix recursively, preserving paths.
+      --help       Show this help text.
+
 Shorthand S3 keys use DEFAULT_S3_BUCKET. When neither path is an s3:// URI,
 a local-looking destination such as ./ selects a download; otherwise an
 existing source is uploaded and a missing source is downloaded. Use an explicit
@@ -122,21 +125,49 @@ Examples:
   s3cp my-key.txt ./
   s3cp ./file.txt s3://other-bucket/my-key.txt
   s3cp s3://other-bucket/my-key.txt ./
+  s3cp -r ./my-dir my-prefix/
+  s3cp -r ./my-dir s3://other-bucket/my-prefix/
+
+Recursive uploads copy the directory's contents under the destination prefix.
 EOF_USAGE
 }
 
 cmd_s3cp() {
-  if [[ ${1-} == --help ]]; then
-    usage_s3cp
-    return 0
-  fi
-  [[ ${1-} == -- ]] && shift
-  if (( $# != 2 )); then
+  local recursive=0
+  local -a operands cp_args
+
+  while (( $# > 0 )); do
+    case $1 in
+      (-r|--recursive)
+        recursive=1
+        ;;
+      (--help)
+        usage_s3cp
+        return 0
+        ;;
+      (--)
+        shift
+        operands+=("$@")
+        break
+        ;;
+      (-*)
+        print -u2 -r -- "Error: Unknown s3cp option: $1"
+        usage_s3cp
+        return 1
+        ;;
+      (*)
+        operands+=("$1")
+        ;;
+    esac
+    shift
+  done
+
+  if (( $#operands != 2 )); then
     usage_s3cp
     return 1
   fi
 
-  local source=$1 destination=$2
+  local source=$operands[1] destination=$operands[2]
   local resolved_source=$source resolved_destination=$destination
   local operation
 
@@ -161,9 +192,16 @@ cmd_s3cp() {
     resolved_source=$REPLY
   fi
 
-  if [[ $operation == upload && ! -f $source ]]; then
-    print -u2 -r -- "Error: Local file not found or not a regular file: $source"
-    return 1
+  if [[ $operation == upload ]]; then
+    if [[ -d $source ]]; then
+      if (( ! recursive )); then
+        print -u2 -r -- "Error: Source is a directory; use -r to upload it: $source"
+        return 1
+      fi
+    elif [[ ! -f $source ]]; then
+      print -u2 -r -- "Error: Local file not found or not a regular file: $source"
+      return 1
+    fi
   fi
 
   case $operation in
@@ -171,7 +209,9 @@ cmd_s3cp() {
     (download) print -u2 -r -- "Downloading: $resolved_source -> $resolved_destination..." ;;
     (*) print -u2 -r -- "Copying: $resolved_source -> $resolved_destination..." ;;
   esac
-  s3_aws s3 cp "$resolved_source" "$resolved_destination" || {
+  cp_args=(cp "$resolved_source" "$resolved_destination")
+  (( recursive )) && cp_args+=(--recursive)
+  s3_aws s3 "${cp_args[@]}" || {
     print -u2 -r -- "Error: Failed to copy '$resolved_source' to '$resolved_destination'"
     return 1
   }

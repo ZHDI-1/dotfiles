@@ -23,7 +23,7 @@ for (( i = 2; i < CURRENT; i++ )); do
     options_ended=1
   elif (( ! options_ended )) && [[ $service == s3ls && $word == (-h|--human-readable|--help) ]]; then
     :
-  elif (( ! options_ended )) && [[ $service == s3cp && $word == --help ]]; then
+  elif (( ! options_ended )) && [[ $service == s3cp && $word == (-r|--recursive|--help) ]]; then
     :
   else
     (( operand_count++ ))
@@ -43,7 +43,7 @@ fi
 # s3cp: the first operand may be local or remote; the second is the other side.
 # Return success if any branch added matches, so _approximate does not run.
 if (( ! options_ended )) && [[ $current == -* ]]; then
-  compadd -S '' -- --help && ret=0
+  compadd -S '' -- -r --recursive --help && ret=0
 elif (( operand_count == 0 )); then
   if [[ $current == s3://* ]]; then
     _s3cp_remote && ret=0

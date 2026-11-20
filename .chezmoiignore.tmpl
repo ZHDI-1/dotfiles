@@ -41,3 +41,8 @@ scripts/
 .wakeup
 Library/LaunchAgents/
 {{- end }}
+
+{{- if eq .chezmoi.hostname "zhdi-mbp" }}
+# Temporarily keep the retired Win Server tunnel out of LaunchAgents on this Mac.
+Library/LaunchAgents/com.zhdi.winserver.proxy.plist
+{{- end }}

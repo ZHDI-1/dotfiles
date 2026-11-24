@@ -145,6 +145,7 @@ Host gitlab.com
 # Defaults for every host. ssh keeps the first value it sees for each option,
 # so this block must stay last or it overrides the host blocks above.
 Host *
+  Compression yes
   ServerAliveInterval 60
   TCPKeepAlive yes
   ServerAliveCountMax 3

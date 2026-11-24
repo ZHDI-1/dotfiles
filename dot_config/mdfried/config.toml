@@ -1,0 +1,15 @@
+font_family = "Noto Serif CJK SC"
+ignore_text_sizing_protocol = true
+
+[theme]
+header_color = "#3c3836"
+code_theme = "Gruvbox Light"
+code_bg = "229"
+code_fg = "124"
+link_bg = "229"
+link_fg = "24"
+prefix_color = "130"
+emphasis_color = "136"
+hr_color = "245"
+table_border_color = "245"
+table_header_color = "237"

@@ -31,3 +31,24 @@ $debug-hypothesis Determine whether this macro can cause the observed bad state.
 
 `CODE_LEARNING_EVIDENCE.md` is shared guidance for the six skills, not an
 invocable skill, mandatory report template, or task router.
+
+# KFS / Ceph operations
+
+| Need | Invoke | Boundary |
+| --- | --- | --- |
+| Pull and interpret monitoring data for a KFS / Ceph incident | `$kfs-ceph-metrics` | Off-cluster, read-only HTTP: perflog, Prometheus, Falcon, kfs-platform |
+| Run anything on a production cluster: ceph CLI, admin socket, log pulls, any state change | `$ceph-prod-ops` | Risk tiers: verified read-only ops run directly through `prod/ro.sh`; mutations and wrapper core changes need a double independent review and user approval |
+
+The two skills split at the cluster boundary: querying monitoring endpoints is
+free, while touching a cluster host goes through the `$ceph-prod-ops` gate.
+
+# Company docs
+
+| Need | Invoke | Boundary |
+| --- | --- | --- |
+| Read, create or update a docs.corp.kuaishou.com doc, or fetch its images | `$kuaishou-docs` | Direct takumi API with the user's mfcli login token; writes publish, so only on the user's explicit request |
+
+`$kuaishou-docs` is hidden from mfcli on purpose: it bypasses mfcli and uses its login token directly. mfcli
+reads `~/.agents/skills` and `~/.claude/skills`, so hide such skills by name in mfcli's global config
+`~/.codeflicker/config.json` → `"skills": {"disabled": [...]}` (the same key mfcli's own skill toggle writes;
+`mfcli config set` rejects it). Check with `mfcli skill list --json` (status `off`).

@@ -91,6 +91,7 @@ _claudeside() {
 alias codexs='_codexside'
 alias claudes='_claudeside'
 alias pis='_piside'
+alias agy='agy-gruvbox'
 
 # Keep cat on the system binary while syspolicyd/Homebrew exec checks are unstable.
 # alias cat='bat'

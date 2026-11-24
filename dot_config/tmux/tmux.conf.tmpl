@@ -36,6 +36,7 @@ set -s extended-keys on
 set -s extended-keys-format csi-u
 set -s focus-events on
 set -s set-clipboard on
+set -g allow-passthrough on
 set -g mouse off
 set -g set-titles on
 set-option -g xterm-keys on
@@ -87,7 +88,7 @@ bind-key '"' split-window -c '#{pane_current_path}'
 
 
 bind-key R set-option -F @trs-level '#{?#{==:#{@trs-level},pane},window,pane}'
-bind-key C-r if-shell -F '#{==:#{@trs-level},session}' 'set-option -F @trs-level "#{?#{==:#{@trs-return-level},window},window,pane}"' 'set-option -F @trs-return-level "#{@trs-level}" ; set-option @trs-level session'
+bind-key M-r if-shell -F '#{==:#{@trs-level},session}' 'set-option -F @trs-level "#{?#{==:#{@trs-return-level},window},window,pane}"' 'set-option -F @trs-return-level "#{@trs-level}" ; set-option @trs-level session'
 
 {{ else if eq .tmuxRole "client" }}
 set -g @tmux-remote-sessions-vim-navigation on

@@ -1,0 +1,421 @@
+#!/usr/bin/env python3
+"""PTY color-remapping wrapper for Antigravity CLI (`agy`) -> Gruvbox Light.
+
+Designed for `agy` running with `"colorScheme": "terminal"` inside a Gruvbox Light
+terminal (e.g. Ghostty / tmux). Remaps `agy`'s dark-assumed 16-color ANSI codes
+(such as `37m` muted text) and Chroma's dark-mode 256-color syntax tokens
+(`38;5;252`, `38;5;214`, etc.) into high-contrast Gruvbox Light TrueColor values,
+while preserving default fg/bg (`39m`/`49m`), OSC hyperlinks, mouse/keyboard
+protocols, window resizes, and custom TrueColor status lines.
+"""
+
+from __future__ import annotations
+
+import colorsys
+import errno
+import fcntl
+import os
+import pty
+import re
+import select
+import shutil
+import signal
+import struct
+import sys
+import termios
+import tty
+
+# Gruvbox Light palette (RGB)
+BG0 = (251, 241, 199)       # #fbf1c7
+BG1 = (235, 219, 178)       # #ebdbb2
+BG2 = (213, 196, 161)       # #d5c4a1
+FG0 = (40, 40, 40)          # #282828
+FG1 = (60, 56, 54)          # #3c3836
+FG2 = (80, 73, 69)          # #504945
+FG3 = (102, 92, 84)         # #665c54
+FG4 = (124, 111, 100)       # #7c6f64
+GRAY = (146, 131, 116)      # #928374
+GRAY_LIGHT = (168, 153, 132)  # #a89984
+
+RED = (157, 0, 6)           # #9d0006
+GREEN = (121, 116, 14)      # #79740e
+YELLOW = (181, 118, 20)     # #b57614
+BLUE = (7, 102, 120)        # #076678
+PURPLE = (143, 63, 113)     # #8f3f71
+AQUA = (66, 123, 88)        # #427b58
+ORANGE = (175, 58, 3)       # #af3a03
+
+DIFF_ADD_BG = (226, 229, 181)  # #e2e5b5
+DIFF_DEL_BG = (242, 208, 196)  # #f2d0c4
+
+# Exact 1-to-1 mapping for agy's built-in "solarized light" TrueColor palette
+# -> Gruvbox Light. Preserves full semantic richness (Markdown titles/headings,
+# code-block surfaces, diffs, and Chroma light syntax tokens) while leaving
+# unrelated TrueColor sequences (e.g. custom Gruvbox statusline) untouched.
+SOLARIZED_LIGHT_TO_GRUVBOX: dict[tuple[int, int, int], tuple[int, int, int]] = {
+    (253, 246, 227): BG0,          # #fdf6e3 base3 -> #fbf1c7 bg0
+    (238, 232, 213): BG1,          # #eee8d5 base2 -> #ebdbb2 bg1
+    (7, 54, 66): FG1,              # #073642 base02 -> #3c3836 fg1
+    (0, 43, 54): FG0,              # #002b36 base03 -> #282828 fg0
+    (88, 110, 117): FG2,           # #586e75 base01 -> #504945 fg2
+    (101, 123, 131): FG3,          # #657b83 base00 -> #665c54 fg3
+    (131, 148, 150): GRAY,         # #839496 base0 -> #928374 gray
+    (147, 161, 161): GRAY_LIGHT,   # #93a1a1 base1 -> #a89984 gray_light
+    (38, 139, 210): BLUE,          # #268bd2 blue -> #076678 blue
+    (42, 161, 152): AQUA,          # #2aa198 cyan -> #427b58 aqua
+    (133, 153, 0): GREEN,          # #859900 green -> #79740e green
+    (181, 137, 0): YELLOW,         # #b58900 yellow -> #b57614 yellow
+    (203, 75, 22): ORANGE,         # #cb4b16 orange -> #af3a03 orange
+    (220, 50, 47): RED,            # #dc322f red -> #9d0006 red
+    (211, 54, 130): PURPLE,        # #d33682 magenta -> #8f3f71 purple
+    (108, 113, 196): PURPLE,       # #6c71c4 violet -> #8f3f71 purple
+    (205, 224, 180): DIFF_ADD_BG,  # #cde0b4 solarized diff add bg
+    (242, 198, 190): DIFF_DEL_BG,  # #f2c6be solarized diff del bg
+    (232, 240, 254): BG1,          # #e8f0fe light selection tint
+    (174, 203, 250): BG2,          # #aecbfa light highlight tint
+}
+
+# Basic 16-color ANSI foreground codes -> Gruvbox Light RGB
+ANSI16_FG: dict[int, tuple[int, int, int]] = {
+    30: FG1,     # black -> dark fg
+    31: RED,     # red -> errors / diff del
+    32: GREEN,   # green -> success bullets / diff add
+    33: YELLOW,  # yellow -> tool verbs / warnings
+    34: BLUE,    # blue -> user prompt / links
+    35: PURPLE,  # magenta
+    36: AQUA,    # cyan
+    37: FG4,     # white (used by agy for muted text/thoughts) -> readable muted gray
+    90: GRAY,    # bright black (dividers, tips) -> softer gray than fg4
+    91: RED,     # bright red
+    92: AQUA,    # bright green
+    93: ORANGE,  # bright yellow
+    94: ORANGE,  # bright blue (inline code, prompt caret, banner accent)
+    95: PURPLE,  # bright magenta
+    96: AQUA,    # bright cyan
+    97: FG0,     # bright white -> strongest dark fg
+}
+
+# Basic 16-color ANSI background codes -> Gruvbox Light RGB
+ANSI16_BG: dict[int, tuple[int, int, int]] = {
+    40: BG1,
+    41: DIFF_DEL_BG,
+    42: DIFF_ADD_BG,
+    43: BG2,
+    44: BG1,
+    45: BG1,
+    46: BG1,
+    47: BG2,
+    100: BG2,
+    101: DIFF_DEL_BG,
+    102: DIFF_ADD_BG,
+    103: BG2,
+    104: BG1,
+    105: BG1,
+    106: BG1,
+    107: BG1,
+}
+
+# Standard xterm 256-color RGB values for indices 16..255
+_CUBE_LEVELS = (0, 95, 135, 175, 215, 255)
+
+
+def _xterm_rgb(idx: int) -> tuple[int, int, int]:
+    if 16 <= idx <= 231:
+        n = idx - 16
+        r = _CUBE_LEVELS[n // 36]
+        g = _CUBE_LEVELS[(n // 6) % 6]
+        b = _CUBE_LEVELS[n % 6]
+        return (r, g, b)
+    if 232 <= idx <= 255:
+        v = 8 + (idx - 232) * 10
+        return (v, v, v)
+    return FG1
+
+
+def _map_rgb_to_gruvbox_fg(r: int, g: int, b: int) -> tuple[int, int, int]:
+    max_c = max(r, g, b)
+    min_c = min(r, g, b)
+    delta = max_c - min_c
+    # Relative luminance in [0, 1]
+    lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
+
+    # Neutral / near-gray (e.g. Chroma 252 #d0d0d0 identifiers, 246 #949494 comments)
+    if delta < 28 or (max_c > 0 and delta / max_c < 0.14):
+        if lum >= 0.72:
+            return FG1   # dark-mode bright text -> Gruvbox Light primary text
+        if lum >= 0.45:
+            return GRAY  # comments
+        return FG4       # darker muted text
+
+    h, _s, _v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+    deg = h * 360.0
+    if deg < 18.0 or deg >= 335.0:
+        return RED
+    if deg < 42.0:
+        return ORANGE
+    if deg < 72.0:
+        return YELLOW
+    if deg < 145.0:
+        return GREEN
+    if deg < 200.0:
+        return AQUA
+    if deg < 255.0:
+        return BLUE
+    return PURPLE
+
+
+def _map_rgb_to_gruvbox_bg(r: int, g: int, b: int) -> tuple[int, int, int]:
+    max_c = max(r, g, b)
+    min_c = min(r, g, b)
+    delta = max_c - min_c
+    if delta < 24:
+        return BG1
+    h, _s, _v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+    deg = h * 360.0
+    if deg < 25.0 or deg >= 330.0:
+        return DIFF_DEL_BG
+    if 70.0 <= deg < 170.0:
+        return DIFF_ADD_BG
+    return BG1
+
+
+def _build_256_tables() -> tuple[list[tuple[int, int, int]], list[tuple[int, int, int]]]:
+    fg_table: list[tuple[int, int, int]] = []
+    bg_table: list[tuple[int, int, int]] = []
+    ansi16_fg_list = [
+        FG1, RED, GREEN, YELLOW, BLUE, PURPLE, AQUA, FG4,
+        GRAY, RED, AQUA, ORANGE, ORANGE, PURPLE, AQUA, FG0,
+    ]
+    ansi16_bg_list = [
+        BG1, DIFF_DEL_BG, DIFF_ADD_BG, BG2, BG1, BG1, BG1, BG2,
+        BG2, DIFF_DEL_BG, DIFF_ADD_BG, BG2, BG1, BG1, BG1, BG1,
+    ]
+    for i in range(256):
+        if i < 16:
+            fg_table.append(ansi16_fg_list[i])
+            bg_table.append(ansi16_bg_list[i])
+        else:
+            r, g, b = _xterm_rgb(i)
+            fg_table.append(_map_rgb_to_gruvbox_fg(r, g, b))
+            bg_table.append(_map_rgb_to_gruvbox_bg(r, g, b))
+    return fg_table, bg_table
+
+
+XTERM256_FG, XTERM256_BG = _build_256_tables()
+REMAP_TRUECOLOR = os.environ.get("AGY_GRUVBOX_REMAP_TRUECOLOR", "0") == "1"
+
+# Matches complete CSI SGR sequences: ESC [ <params> m
+_SGR_RE = re.compile(rb"\x1b\[([0-9;]*)m")
+# Matches an incomplete trailing ESC or CSI SGR prefix at chunk boundary
+_INCOMPLETE_SGR_RE = re.compile(rb"\x1b(?:\[[0-9;]*)?$")
+
+
+def _rgb_sgr(prefix: str, rgb: tuple[int, int, int]) -> str:
+    return f"{prefix};2;{rgb[0]};{rgb[1]};{rgb[2]}"
+
+
+def _rewrite_sgr(match: re.Match[bytes]) -> bytes:
+    raw = match.group(1)
+    if not raw:
+        return match.group(0)
+
+    parts = raw.decode("ascii").split(";")
+    out: list[str] = []
+    changed = False
+    i = 0
+    n = len(parts)
+
+    while i < n:
+        p = parts[i]
+        if not p:
+            out.append(p)
+            i += 1
+            continue
+        code = int(p)
+
+        # Extended foreground (38) or background (48)
+        if code in (38, 48) and i + 1 < n:
+            mode = parts[i + 1]
+            if mode == "5" and i + 2 < n and parts[i + 2]:
+                idx = int(parts[i + 2])
+                if 0 <= idx < 256:
+                    rgb = XTERM256_FG[idx] if code == 38 else XTERM256_BG[idx]
+                    out.append(_rgb_sgr(str(code), rgb))
+                    changed = True
+                    i += 3
+                    continue
+            elif mode == "2" and i + 4 < n:
+                r, g, b = int(parts[i + 2]), int(parts[i + 3]), int(parts[i + 4])
+                mapped = SOLARIZED_LIGHT_TO_GRUVBOX.get((r, g, b))
+                if mapped is not None:
+                    # Map Solarized Light base3 background to default bg (49) so it
+                    # blends seamlessly with the terminal's Gruvbox Light background.
+                    if code == 48 and mapped == BG0:
+                        out.append("49")
+                    else:
+                        out.append(_rgb_sgr(str(code), mapped))
+                    changed = True
+                elif REMAP_TRUECOLOR:
+                    rgb = (
+                        _map_rgb_to_gruvbox_fg(r, g, b)
+                        if code == 38
+                        else _map_rgb_to_gruvbox_bg(r, g, b)
+                    )
+                    out.append(_rgb_sgr(str(code), rgb))
+                    changed = True
+                else:
+                    out.extend(parts[i : i + 5])
+                i += 5
+                continue
+
+        if code in ANSI16_FG:
+            out.append(_rgb_sgr("38", ANSI16_FG[code]))
+            changed = True
+        elif code in ANSI16_BG:
+            out.append(_rgb_sgr("48", ANSI16_BG[code]))
+            changed = True
+        else:
+            out.append(p)
+        i += 1
+
+    if not changed:
+        return match.group(0)
+    return ("\x1b[" + ";".join(out) + "m").encode("ascii")
+
+
+def transform_chunk(data: bytes, pending: bytes) -> tuple[bytes, bytes]:
+    buf = pending + data
+    m = _INCOMPLETE_SGR_RE.search(buf)
+    if m and (len(buf) - m.start()) <= 64:
+        tail = buf[m.start() :]
+        head = buf[: m.start()]
+    else:
+        tail = b""
+        head = buf
+    return _SGR_RE.sub(_rewrite_sgr, head), tail
+
+
+def _find_agy_bin() -> str:
+    explicit = os.environ.get("AGY_REAL_BIN")
+    if explicit:
+        return explicit
+    self_real = os.path.realpath(__file__)
+    for candidate in (
+        os.path.expanduser("~/.local/bin/agy"),
+        shutil.which("agy") or "",
+    ):
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            if os.path.realpath(candidate) != self_real:
+                return candidate
+    return "agy"
+
+
+def _copy_winsize(src_fd: int, dst_fd: int) -> None:
+    try:
+        winsize = fcntl.ioctl(src_fd, termios.TIOCGWINSZ, struct.pack("HHHH", 0, 0, 0, 0))
+        fcntl.ioctl(dst_fd, termios.TIOCSWINSZ, winsize)
+    except OSError:
+        pass
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        try:
+            written = os.write(fd, view)
+            view = view[written:]
+        except BlockingIOError:
+            select.select([], [fd], [])
+        except InterruptedError:
+            continue
+
+
+def main() -> int:
+    agy_bin = _find_agy_bin()
+    argv = [agy_bin, *sys.argv[1:]]
+
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        os.execvp(agy_bin, argv)
+
+    stdin_fd = sys.stdin.fileno()
+    stdout_fd = sys.stdout.fileno()
+
+    master_fd, slave_fd = pty.openpty()
+    _copy_winsize(stdin_fd, slave_fd)
+
+    pid = os.fork()
+    if pid == 0:
+        os.close(master_fd)
+        os.setsid()
+        try:
+            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+        except OSError:
+            pass
+        os.dup2(slave_fd, 0)
+        os.dup2(slave_fd, 1)
+        os.dup2(slave_fd, 2)
+        if slave_fd > 2:
+            os.close(slave_fd)
+        os.execvp(agy_bin, argv)
+
+    os.close(slave_fd)
+
+    old_termios = termios.tcgetattr(stdin_fd)
+    tty.setraw(stdin_fd)
+
+    def _on_winch(_signum: int, _frame: object) -> None:
+        _copy_winsize(stdin_fd, master_fd)
+        try:
+            os.kill(pid, signal.SIGWINCH)
+        except ProcessLookupError:
+            pass
+
+    prev_winch = signal.signal(signal.SIGWINCH, _on_winch)
+    pending = b""
+
+    try:
+        while True:
+            try:
+                rlist, _, _ = select.select([stdin_fd, master_fd], [], [])
+            except InterruptedError:
+                continue
+
+            if stdin_fd in rlist:
+                try:
+                    user_in = os.read(stdin_fd, 4096)
+                except OSError:
+                    break
+                if not user_in:
+                    break
+                _write_all(master_fd, user_in)
+
+            if master_fd in rlist:
+                try:
+                    chunk = os.read(master_fd, 65536)
+                except OSError as exc:
+                    if exc.errno == errno.EIO:
+                        break
+                    raise
+                if not chunk:
+                    break
+                transformed, pending = transform_chunk(chunk, pending)
+                if transformed:
+                    _write_all(stdout_fd, transformed)
+
+        if pending:
+            _write_all(stdout_fd, pending)
+    finally:
+        signal.signal(signal.SIGWINCH, prev_winch)
+        termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_termios)
+        os.close(master_fd)
+
+    _, status = os.waitpid(pid, 0)
+    if os.WIFEXITED(status):
+        return os.WEXITSTATUS(status)
+    if os.WIFSIGNALED(status):
+        return 128 + os.WTERMSIG(status)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

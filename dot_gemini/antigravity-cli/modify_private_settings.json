@@ -1,0 +1,26 @@
+{{- /* chezmoi:modify-template */ -}}
+{{- /* Own only the portable Antigravity CLI settings below; preserve machine-local
+       fields such as trustedWorkspaces. Preserve original text when settings
+       already match. */ -}}
+{{- $config := dict -}}
+{{- if .chezmoi.stdin | trim -}}
+{{- $config = fromJson .chezmoi.stdin -}}
+{{- end -}}
+{{- $before := $config | toPrettyJson -}}
+{{- $after := $config |
+    setValueAtPath "allowNonWorkspaceAccess" true |
+    setValueAtPath "artifactReviewPolicy" "always-proceed" |
+    setValueAtPath "colorScheme" "solarized light" |
+    setValueAtPath "model" "Gemini 4 Neon (Medium)" |
+    setValueAtPath "notifications" true |
+    setValueAtPath "queuedMessages" "send-immediately" |
+    setValueAtPath "statusLine.type" "command" |
+    setValueAtPath "statusLine.command" "bash ~/.gemini/statusline-command.sh" |
+    setValueAtPath "statusLine.enabled" true |
+    setValueAtPath "toolPermission" "always-proceed" |
+    toPrettyJson -}}
+{{- if eq $before $after -}}
+{{- .chezmoi.stdin -}}
+{{- else -}}
+{{- $after -}}
+{{- end -}}
